@@ -215,7 +215,7 @@ def build_and_run_pipeline(doc_index, pipeline_memory, queries, model):
     benchmark_tracker = BenchmarkTracker()
     dfs = [] 
     
-    print(f"DEBUG: {model}")
+    print(f"DEBUG Model being used is: {model}")
     llm = Ollama(model=model, base_url="http://localhost:11434", request_timeout=600.0)
 
     for query in queries:
