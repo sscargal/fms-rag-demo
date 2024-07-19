@@ -38,8 +38,8 @@ SYSTEM_PROMPT = ChatPromptTemplate([
         content=(
             "You are a very helpful Q&A system. To assist in answering a user message, you will be provided with "
             "the following: chat history from this current user session, chat history from past sessions other than "
-            "the current one, and possibly relevant context from documents. Unless the user specifies otherwise, note that "
-            "the user's references to past chat history likely refer to previous messages in the current session. "
+            "the current one, and possibly relevant context from documents. Current session messages are listed chronologically, "
+            "with the session's first user query at the top. "
             "If you are not provided with sufficient context to respond to the user, simply say it "
             "and do not guess the answer."
         )
@@ -77,7 +77,7 @@ def get_chat_history_str(query_str, pipeline_memory, benchmark_tracker):
     print(f"Total composable memory context retrieval time: {delta:.6f} seconds")
 
     retrieved_messages = [str(msg) for msg in retrieved_memory]
-    composite_message = "\n".join(retrieved_messages) #join the retrieved messages together to get their token count  
+    composite_message = "\n".join(retrieved_messages) #joining the retrieved messages together is needed to get their token count  
 
     token_counter.reset_counts()
     token_count = len(token_counter.tokenizer(composite_message))
@@ -87,9 +87,8 @@ def get_chat_history_str(query_str, pipeline_memory, benchmark_tracker):
     print(f"Composable memory context retrieval tps: {tps}")
     benchmark_tracker.memory_retrieval_tps = tps
     
-    #parse and reorder SimpleComposableMemory output
     lines = composite_message.split("\n") 
-    #get start and end indices of secondary context messages 
+    #get start and end indices of the secondary memory source context 
     start_index = next((i for i, line in enumerate(lines) if line.startswith("=====Relevant messages from memory source ")), -1)
     end_index = next((i for i, line in enumerate(lines) if line.startswith("This is the end of the retrieved message dialogues.")), -1)
     
@@ -107,10 +106,10 @@ def get_chat_history_str(query_str, pipeline_memory, benchmark_tracker):
     #passing in a query to .get() will activate primary and secondary memory retrievers with the settings
     #they were configured with, eg top_k vectors to return. This is important for not exceeding context size
 
-def rewrite_query(query_str, chat_history_str):
+def rewrite_query(query_str, chat_history_str, llm):
     rewrite_input = REWRITE_PROMPT.format(chat_history_str=chat_history_str, query_str=query_str)
-    #rewritten_query = llm.complete(rewrite_input)
-    rewritten_query = "COVID COVID COVID DEBUG"
+    rewritten_query = llm.complete(rewrite_input)
+    #rewritten_query = "COVID COVID COVID DEBUG"
     return str(rewritten_query)
     
 #this function gives timing control over retrieval rather than just having the retriever itself as a module in the pipeline
@@ -136,14 +135,13 @@ def doc_index_retrieve(query_str, retriever, benchmark_tracker):
     benchmark_tracker.doc_retrieval_tps = tps 
     return nodes 
 
-def synthesize_response(query_str, retrieved_nodes, chat_history_str, benchmark_tracker):
+def synthesize_response(query_str, retrieved_nodes, chat_history_str, benchmark_tracker, llm):
     node_context = "" 
     
     for idx, node in enumerate(retrieved_nodes):
         node_text = node.get_content(metadata_mode="llm")
         node_context += f"Context Chunk {idx}:\n{node_text}\n\n"
     
-    # Combine system prompt and QA prompt
     combined_prompt = SYSTEM_PROMPT.format() + CONTEXT_PROMPT.format(
         node_context=node_context,
         query_str=query_str,
@@ -151,8 +149,7 @@ def synthesize_response(query_str, retrieved_nodes, chat_history_str, benchmark_
     )
     print(f"COMBINED PROMPT: {combined_prompt}")
 
-    response = "This is a debug string"
-    #response = llm.complete(combined_prompt)
+    response = llm.complete(combined_prompt)
     pipeline_end_time = time.perf_counter()
     print(f"Pipeline ending time: {pipeline_end_time:6f}")
     pipeline_delta = pipeline_end_time - benchmark_tracker.pipeline_start_time 
@@ -170,7 +167,7 @@ def synthesize_response(query_str, retrieved_nodes, chat_history_str, benchmark_
     return str(response)
 
 
-def build_and_run_pipeline(doc_index, pipeline_memory, queries):
+def build_and_run_pipeline(doc_index, pipeline_memory, queries, model):
     print("Building RAG pipeline")
 
     #set up pipeline components
@@ -197,6 +194,7 @@ def build_and_run_pipeline(doc_index, pipeline_memory, queries):
     pipeline.add_link("input", "rewriter", src_key="query_str", dest_key="query_str")
     pipeline.add_link("input", "memory_retriever", src_key="query_str", dest_key="query_str")
     pipeline.add_link("input", "memory_retriever", src_key="pipeline_memory", dest_key="pipeline_memory")
+    pipeline.add_link("input", "rewriter", src_key="llm", dest_key="llm")
     pipeline.add_link("memory_retriever", "rewriter", dest_key="chat_history_str") #send context from memory to use in query rewrite 
 
     pipeline.add_link("input", "query_retriever", src_key="retriever", dest_key="retriever")
@@ -208,17 +206,17 @@ def build_and_run_pipeline(doc_index, pipeline_memory, queries):
 
     #synthesize most relevant context and chat history into query
     pipeline.add_link("input", "synthesizer", src_key="query_str", dest_key="query_str")
+    pipeline.add_link("input", "synthesizer", src_key="llm", dest_key="llm")
     pipeline.add_link("reranker", "synthesizer", src_key="nodes", dest_key="retrieved_nodes")
     pipeline.add_link("memory_retriever", "synthesizer", dest_key="chat_history_str")
-#    pipeline.add_link("input", "benchmark_df", src_key="query_str", dest_key="query_str")
-#    pipeline.add_link("benchmark_df", "output", dest_key="benchmark_df")
-#    pipeline.add_link("synthesizer", "output", dest_key="response")
-#    pipeline.add_link("output", "output_fr")
     print("Pipeline setup complete!")
 
     print("Running queries")
     benchmark_tracker = BenchmarkTracker()
     dfs = [] 
+    
+    print(f"DEBUG: {model}")
+    llm = Ollama(model=model, base_url="http://localhost:11434", request_timeout=600.0)
 
     for query in queries:
         print(f"QUERY: {query}")
@@ -230,6 +228,7 @@ def build_and_run_pipeline(doc_index, pipeline_memory, queries):
             query_str=query,
             retriever=retriever,
             pipeline_memory=pipeline_memory,
+            llm=llm,
             benchmark_tracker=benchmark_tracker
         )
         print(f"PIPELINE OUTPUT: {response}")
@@ -239,7 +238,6 @@ def build_and_run_pipeline(doc_index, pipeline_memory, queries):
         pipeline_memory.put(user_msg)
         response_msg = ChatMessage(role="assistant", content=response)
         pipeline_memory.put(response_msg)
-        
         
         benchmarks = {
             "query": [query],
@@ -256,11 +254,7 @@ def build_and_run_pipeline(doc_index, pipeline_memory, queries):
     #merge the individual dataframes from each pipeline run together
     return(pd.concat(dfs, ignore_index=True)) 
 
-
-    
-#remove df module, just make dataframe outside pipeline
-
-#looking through source code, FnComponent modules can only have one output key, so additional tracking outputs from each module has
+#FnComponent modules can only have one output key, so additional tracking outputs from each module have
 #to be stored in some other structure in order to be accessed by other parts of the pipeline
 class BenchmarkTracker:
     def __init__(self):
@@ -271,7 +265,7 @@ class BenchmarkTracker:
         self.doc_retrieval_tps = 0
         self.pipeline_delta = 0
         self.pipeline_tps = 0
-        #when timing the overall pipeline, considering the start as the pipeline.run() call
+        #when timing the overall pipeline, the start is considered as the pipeline.run() call
         #and the end when the model finishes its final inference within the pipeline
 
     def reset(self):
@@ -285,8 +279,7 @@ class BenchmarkTracker:
 
 #set up module-wide variables 
 Settings.embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-base-en-v1.5")
-llm = Ollama(model="mistral:7b", base_url="http://localhost:11434", request_timeout=600.0)
-token_counter = TokenCountingHandler( #set up callback manager for token counting 
+token_counter = TokenCountingHandler( 
     tokenizer=tiktoken.encoding_for_model("gpt-3.5-turbo").encode
 )
 Settings.callback_manager = CallbackManager([token_counter])
