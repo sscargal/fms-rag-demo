@@ -1,4 +1,0 @@
-,Unnamed: 0,ingestion time,query,composable memory retrieval time,composable memory retrieval tokens/sec,document index retrieval time,document index retrieval tokens/sec,time to final result,overall pipeline tokens/sec
-0,0,0.9904092719953042,What do the article's authors say about if scientists predicted the COVID pandemic?,0.0138514260033844,50247.53406832929,0.0139519379881676,391773.5302891691,6.500225359995966,14.922559546467816
-1,1,0.9904092719953042,I asked you before about what pandemic prevention methods the authors discuss. Could you answer that question again?,0.0103026980068534,77164.25342868031,0.0133942480024416,408085.6199619134,9.895266359002562,25.567780676244706
-2,2,0.9904092719953042,What was the first question I asked you today?,0.0112273989943787,50590.52415295673,0.0117976789915701,463311.4703244301,4.757205258996692,6.516431037187996
