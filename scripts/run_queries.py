@@ -17,6 +17,7 @@ from fmsdemo import CHAT_HISTORY_PATH
 from fmsdemo import DOC_INDEX_PERSIST_DIR
 from fmsdemo import BENCHMARK_DF_PATH
 import pandas as pd
+import sys
 import time
 import subprocess
 import re
@@ -108,12 +109,12 @@ def load_or_create_doc_index(doc_qdrant_client):
 
 def create_chat_history(vector_memory):
     df = pd.read_csv(CHAT_HISTORY_PATH)
-    df = df[:MOCK_CHAT_HISORY_LEN] #more of a debug line. Only loads in part of the csv to reduce memory creation time
+    df = df[:MOCK_CHAT_HISORY_LEN] #more of a debug line. Only loads in part of the csv to reduce memory creation time for testing purposes
     for _, row in df.iterrows(): #read squad csv into secondary vector memory
         msg = ChatMessage(role="user", content=row['question'])
         vector_memory.put(msg)
-        unparsed_answer = row['answers'] #csv answer col contains the actual answer and other info
-        parsed_answer = re.search(r"(?<=\[).+?(?=\])", unparsed_answer).group(0) #extract the answer from the row
+        unparsed_answer = row['answers'] #csv answer col contains the actual answer and other info that needs to be removed
+        parsed_answer = re.search(r"(?<=\[).+?(?=\])", unparsed_answer).group(0) 
         msg = ChatMessage(role="assistant", content=parsed_answer) 
         vector_memory.put(msg)
         
@@ -122,7 +123,6 @@ def create_chat_history(vector_memory):
         vector_memory.put(msg)
 
 qdrant_container_ports = get_qdrant_container_ports()
-#check if there is at least one nonempty entry in list of ports
 if len(qdrant_container_ports) < 2: 
     raise RuntimeError("At least two qdrant databases must be running")
 
@@ -136,7 +136,7 @@ doc_index, ingestion_time = load_or_create_doc_index(doc_db_client)
 #create a primary memory buffer
 chat_memory_buffer = ChatMemoryBuffer.from_defaults(token_limit=1000)
 
-#either create or load secondary memory with past session chat history
+#either create memory with past session chat history
 chat_db_client = QdrantClient(host="localhost", port=qdrant_container_ports[1])
 chat_db_vector_store = QdrantVectorStore(client=chat_db_client, collection_name=CHAT_DB_COLLECTION_NAME)
 vector_memory = VectorMemory.from_defaults(vector_store=chat_db_vector_store, 
@@ -163,7 +163,9 @@ pipeline_memory = composable_memory
 
 from query_pipeline import build_and_run_pipeline
 
-benchmark_df = build_and_run_pipeline(doc_index, pipeline_memory, QUERIES)
+model = sys.argv[1]
+#model = args[1] #model name was passed as script arg from fmsdemo.py
+benchmark_df = build_and_run_pipeline(doc_index, pipeline_memory, QUERIES, model)
 ingest_time_col = []
 #create an ingestion time column (of the right length to match the df's rows) for the query runs of this configuration
 #ingestion only happens once, so all queries under the given demo configuration will be listed with the same time
@@ -175,7 +177,7 @@ for i in range(len(benchmark_df)):
 benchmark_df.insert(loc=0, column="ingestion time", value=ingest_time_col)
 benchmark_df.to_csv(BENCHMARK_DF_PATH)
 
-#trying to make them all use the same collection name causes conflicts. Collection is written to 
+#trying to make them all use the same collection name or same docker volume causes conflicts. Collection is written to 
 #to docker volume and updates in the other mounted clients storage/collections directory, so will say  
 #collection already exists, but then will say it doesn't exist later. Metadata or something important
 #maybe stored in storage/collection? This may also only be because using the same local host volume mounted

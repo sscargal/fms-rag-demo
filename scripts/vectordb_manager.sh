@@ -161,6 +161,7 @@ print_usage() {
     echo "Usage: vectordb_manager.py [options]"
     echo "Options:"
     echo "-n, --num-instances NUM   Specify the number of vector database instances to start. Default: 1"
+    #NOTE: type is not implemented yet!
     echo "-t, --type DB_TYPE        Specify the vector database type (qdrant, weaviate). Default: 'qdrant'"
     echo "-s, --socket SOCKET       Bind vector database(s) to the specified CPU socket."
 #    echo "-b, --bindcpus CPUS       Bind vector database(s) to the specified range/list of CPUs (e.g., 0-7)."
