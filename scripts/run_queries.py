@@ -13,21 +13,17 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client import models
 from llama_index.vector_stores.qdrant import QdrantVectorStore
-from fmsdemo import CHAT_HISTORY_PATH
+from fmsdemo import MOCK_CHAT_HISTORY_PATH
 from fmsdemo import DOC_INDEX_PERSIST_DIR
-from fmsdemo import BENCHMARK_DF_PATH
 import pandas as pd
-import sys
 import time
 import subprocess
 import re
 import os
 
-DOC_DATA_DIR = "../data"
 DOC_DB_COLLECTION_NAME = "llamaindex_doc_db"
 CHAT_INDEX_PERSIST_DIR = "chat_index"
 CHAT_DB_COLLECTION_NAME = "llamaindex_chat_db"
-MOCK_CHAT_HISTORY_PATH = "mock_chat_history.txt"
 MOCK_CHAT_HISORY_LEN = 100
 #this list contains "past" messages related to the queries run in the demo that we want to be retrieved
 RELEVANT_DEMO_HISTORY = [ChatMessage.from_str("Could you summarize the purpose of the article for me?", "user"),
@@ -44,9 +40,6 @@ RELEVANT_DEMO_HISTORY = [ChatMessage.from_str("Could you summarize the purpose o
                                             "8. Realizing that the problem is larger than just coronaviruses; they suggest focusing on other high-risk pathogens like henipaviruses, filoviruses, etc., and developing broadly protective vaccines and antiviral/antimicrobial agents against them.\n"
                                             "The authors also stress that investing more in critical and creative laboratory, field, and behavioral research is essential to prevent future pandemics. They suggest that pandemic prevention should be a global effort on a par with chemical and nuclear weapon prevention. \n"
                                             "user: Can you elaborate more on the prevention methods the authors of the article outline?"), "assistant")]
-QUERIES = ["What do the article's authors say about if scientists predicted the COVID pandemic?",
-           "I asked you before about what pandemic prevention methods the authors discuss. Could you answer that question again?",
-           "What was the first question I asked you today?"]
 
 #enable debug logging
 #logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
@@ -78,7 +71,9 @@ def get_qdrant_container_ports():
         return "Error: docker ps failed" 
     
 #returns a tuple of doc_index, ingestion_time. If ingestion was skipped, ingestion_time will be None
-def load_or_create_doc_index(doc_qdrant_client):
+#this sort of only exists for debug purposes. In the future, persisting to and reading from disk could be useful
+#for benchmarking. But within the demo, ingestion must always be run to benchmark the ingestion time
+def load_or_create_doc_index(doc_qdrant_client, doc_data_dir):
     ingestion_time = None
     doc_vector_store = QdrantVectorStore(client=doc_qdrant_client, collection_name=DOC_DB_COLLECTION_NAME)
     if os.path.exists(DOC_INDEX_PERSIST_DIR):
@@ -88,7 +83,7 @@ def load_or_create_doc_index(doc_qdrant_client):
     else:
         print("No document index found on disk. Creating and ingesting a new index into qdrant database.")
         print("Loading data")
-        documents = SimpleDirectoryReader(DOC_DATA_DIR).load_data()
+        documents = SimpleDirectoryReader(doc_data_dir).load_data()
         storage_context = StorageContext.from_defaults(vector_store=doc_vector_store)
         start_time = time.perf_counter()
         print(f"Starting ingestion. Starting time: {start_time}")
@@ -108,7 +103,7 @@ def load_or_create_doc_index(doc_qdrant_client):
     return doc_index, ingestion_time
 
 def create_chat_history(vector_memory):
-    df = pd.read_csv(CHAT_HISTORY_PATH)
+    df = pd.read_csv(MOCK_CHAT_HISTORY_PATH)
     df = df[:MOCK_CHAT_HISORY_LEN] #more of a debug line. Only loads in part of the csv to reduce memory creation time for testing purposes
     for _, row in df.iterrows(): #read squad csv into secondary vector memory
         msg = ChatMessage(role="user", content=row['question'])
@@ -122,63 +117,64 @@ def create_chat_history(vector_memory):
     for msg in RELEVANT_DEMO_HISTORY:
         vector_memory.put(msg)
 
-qdrant_container_ports = get_qdrant_container_ports()
-if len(qdrant_container_ports) < 2: 
-    raise RuntimeError("At least two qdrant databases must be running")
+#takes in the name of the model to run and a list of the queries to pass into the pipeline
+def run_queries(model, queries, doc_data_dir):
+    qdrant_container_ports = get_qdrant_container_ports()
+    if len(qdrant_container_ports) < 2: 
+        raise RuntimeError("At least two qdrant databases must be running")
 
-#set embedding model
-Settings.embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-base-en-v1.5")
+    #set embedding model
+    Settings.embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-base-en-v1.5")
 
-#load data
-doc_db_client= QdrantClient(host="localhost", port=qdrant_container_ports[0])
-doc_index, ingestion_time = load_or_create_doc_index(doc_db_client)
+    #load data
+    doc_db_client = QdrantClient(host="localhost", port=qdrant_container_ports[0])
+    doc_index, ingestion_time = load_or_create_doc_index(doc_db_client, doc_data_dir)
 
-#create a primary memory buffer
-chat_memory_buffer = ChatMemoryBuffer.from_defaults(token_limit=1000)
+    #create a primary memory buffer
+    chat_memory_buffer = ChatMemoryBuffer.from_defaults(token_limit=1000)
 
-#either create memory with past session chat history
-chat_db_client = QdrantClient(host="localhost", port=qdrant_container_ports[1])
-chat_db_vector_store = QdrantVectorStore(client=chat_db_client, collection_name=CHAT_DB_COLLECTION_NAME)
-vector_memory = VectorMemory.from_defaults(vector_store=chat_db_vector_store, 
-                                           retriever_kwargs={"similarity_top_k": 4})
+    #either create memory with past session chat history
+    chat_db_client = QdrantClient(host="localhost", port=qdrant_container_ports[1])
+    chat_db_vector_store = QdrantVectorStore(client=chat_db_client, collection_name=CHAT_DB_COLLECTION_NAME)
+    vector_memory = VectorMemory.from_defaults(vector_store=chat_db_vector_store, 
+                                               retriever_kwargs={"similarity_top_k": 4})
 
-chat_db_collections = chat_db_client.get_collections().collections
-if any(collection.name == CHAT_DB_COLLECTION_NAME for collection in chat_db_collections):
-    print("Chat history already exists in database client. Skipping creating a mock chat history.")
-else:
-    chat_db_client.create_collection(
-        collection_name=CHAT_DB_COLLECTION_NAME,
-        vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE)
-    )
-    print("Creating mock chat history")
-    create_chat_history(vector_memory)
-
-#create composable memory
-composable_memory = SimpleComposableMemory.from_defaults(
-    primary_memory=chat_memory_buffer,
-    secondary_memory_sources=[vector_memory]
-)
-
-pipeline_memory = composable_memory 
-
-from query_pipeline import build_and_run_pipeline
-
-model = sys.argv[1]
-#model = args[1] #model name was passed as script arg from fmsdemo.py
-benchmark_df = build_and_run_pipeline(doc_index, pipeline_memory, QUERIES, model)
-ingest_time_col = []
-#create an ingestion time column (of the right length to match the df's rows) for the query runs of this configuration
-#ingestion only happens once, so all queries under the given demo configuration will be listed with the same time
-for i in range(len(benchmark_df)):
-    if ingestion_time is None:
-        ingest_time_col.append(pd.NA)
+    chat_db_collections = chat_db_client.get_collections().collections
+    if any(collection.name == CHAT_DB_COLLECTION_NAME for collection in chat_db_collections):
+        print("Chat history already exists in database client. Skipping creating a mock chat history.")
     else:
-        ingest_time_col.append(ingestion_time)
-benchmark_df.insert(loc=0, column="ingestion time", value=ingest_time_col)
-benchmark_df.to_csv(BENCHMARK_DF_PATH)
+        chat_db_client.create_collection(
+            collection_name=CHAT_DB_COLLECTION_NAME,
+            vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE)
+        )
+        print("Creating mock chat history")
+        create_chat_history(vector_memory)
 
-#trying to make them all use the same collection name or same docker volume causes conflicts. Collection is written to 
-#to docker volume and updates in the other mounted clients storage/collections directory, so will say  
-#collection already exists, but then will say it doesn't exist later. Metadata or something important
-#maybe stored in storage/collection? This may also only be because using the same local host volume mounted
-#to each of their storage dirs
+    #create composable memory
+    composable_memory = SimpleComposableMemory.from_defaults(
+        primary_memory=chat_memory_buffer,
+        secondary_memory_sources=[vector_memory]
+    )
+
+    pipeline_memory = composable_memory 
+
+    from query_pipeline import build_and_run_pipeline
+
+    #model = args[1] #model name was passed as script arg from fmsdemo.py
+    benchmark_df = build_and_run_pipeline(doc_index, pipeline_memory, queries, model)
+    ingest_time_col = []
+    #create an ingestion time column (of the right length to match the df's rows) for the query runs of this configuration
+    #ingestion only happens once, so all queries under the given demo configuration will be listed with the same time
+    for i in range(len(benchmark_df)):
+        if ingestion_time is None:
+            ingest_time_col.append(pd.NA)
+        else:
+            ingest_time_col.append(ingestion_time)
+    benchmark_df.insert(loc=0, column="ingestion time", value=ingest_time_col)
+    return benchmark_df
+
+    #trying to make them all use the same collection name or same docker volume causes conflicts. Collection is written to 
+    #to docker volume and updates in the other mounted clients storage/collections directory, so will say  
+    #collection already exists, but then will say it doesn't exist later. Metadata or something important
+    #maybe stored in storage/collection? This may also only be because using the same local host volume mounted
+    #to each of their storage dirs
