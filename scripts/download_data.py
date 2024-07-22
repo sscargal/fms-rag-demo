@@ -2,7 +2,7 @@
 
 from datasets import load_dataset
 import pandas as pd
-from fmsdemo import CHAT_HISTORY_PATH
+from scripts.fmsdemo import CHAT_HISTORY_PATH
 
 #load the dataset from hugging face
 #dataset = load_dataset("dell-research-harvard/newswire")
