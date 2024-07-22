@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 
-from datasets import load_dataset
 import pandas as pd
-from scripts.fmsdemo import CHAT_HISTORY_PATH
 
 #load the dataset from hugging face
 #dataset = load_dataset("dell-research-harvard/newswire")
@@ -18,7 +16,20 @@ from scripts.fmsdemo import CHAT_HISTORY_PATH
 #print("Dataset downloaded and combined into 'f{FILE_PATH}'")
 
 #download and parse question-answer pair dataset
+CHAT_HISTORY_PATH = "mock_chat_history.csv"
 splits = {'train': 'plain_text/train-00000-of-00001.parquet', 'validation': 'plain_text/validation-00000-of-00001.parquet'}
 df = pd.read_parquet("hf://datasets/rajpurkar/squad/" + splits["train"])
 selected_cols = df[['question', 'answers']]
 selected_cols.to_csv(CHAT_HISTORY_PATH)
+
+#EN_WIKI_LINES = 5000
+#print("Reading csv")
+#df = pd.read_json("hf://datasets/vocab-transformers/wiki-en-passages-20210101/train.jsonl.gz", lines=True)
+#print("Writing csv lines to file")
+#with open("../data/en_wiki.csv", "w") as f:
+#    i = 0
+#    for row in df.iterrows:
+#        if i >= 5000:
+#            break
+#        f.write(row["text"])
+#        i += 1 
