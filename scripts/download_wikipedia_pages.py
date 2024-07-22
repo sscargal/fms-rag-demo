@@ -13,5 +13,4 @@ else:
 SUBSET_SIZE = "500M"
 subprocess.run(["python", "-m", "wikiextractor.WikiExtractor", f"{DATA_DIR}enwiki-latest-pages-articles-multistream.xml.bz2",
                 "--output", f"{DATA_DIR}extracted_text/",
-                "--bytes", SUBSET_SIZE],
-                "--max-file-number", "1")
+                "--bytes", SUBSET_SIZE])
