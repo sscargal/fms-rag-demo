@@ -20,6 +20,8 @@ QUERIES = ["What do the article's authors say about if scientists predicted the 
            "What was the first question I asked you today?"]
 
 def signal_handler(sig, frame):
+    print("SIGINT sent")
+    time.sleep(5)
     demo_cleanup()
     sys.exit(0)
 
@@ -55,7 +57,6 @@ if __name__ == "__main__":
         subprocess.run(["chmod", "+x", script])    
 
     parser = argparse.ArgumentParser()
-    #NOTE: -d is not fully implemented yet
     parser.add_argument("-c", "--cpu", action="store_true", dest="use_cpu", help="Specify Ollama to use cpu for inferencing (by default, Ollama will attempt to use a gpu)", default=False)
     parser.add_argument("-d", "--data", help="Specify the directory containing the document data to be ingested and indexed", default="../data")
     parser.add_argument("-m", "--model", help="Specify the model to use for inferencing", choices=["mistral:7b", "llama2", "llama3"], default="llama2")
@@ -76,7 +77,7 @@ if __name__ == "__main__":
             print(f"Error: mkdir failed to create a directory at {benchmark_dir}")
             demo_cleanup()
             sys.exit()
-    if benchmark_dir[-1] != "/":
+    if benchmark_dir[-1] != "/": #benchmark_dir needs to end with a slash because later parts assume it does  
         benchmark_dir += "/"
 
     model = args.model
@@ -118,14 +119,14 @@ if __name__ == "__main__":
 
         print("Running query pipeline using the created databases")
         from run_queries import run_queries
-        benchmark_df = run_queries(model, QUERIES, doc_data_dir)
+        benchmark_file_prefix = benchmark_dir + desc.replace(" ", "_") #want to create separate benchmark files for each demo config within the benchmark dir
+        benchmark_df = run_queries(model, QUERIES, doc_data_dir, benchmark_file_prefix)
            
         print("Resetting for next demo configuration")
         benchmark_dfs[desc] = benchmark_df
-        desc = desc.replace(" ", "_")
-        benchmark_df_path = benchmark_dir + desc + "_benchmarks.csv"
-        print(f"Writing results to {benchmark_df_path}")
-        benchmark_df.to_csv(benchmark_df_path)
+        pipeline_df_path = benchmark_file_prefix + "_benchmarks.csv"
+        print(f"Writing results to {pipeline_df_path}")
+        benchmark_df.to_csv(pipeline_df_path)
 
         clear_databases()
     

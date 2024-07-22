@@ -20,6 +20,7 @@ import time
 import subprocess
 import re
 import os
+import signal
 
 DOC_DB_COLLECTION_NAME = "llamaindex_doc_db"
 CHAT_INDEX_PERSIST_DIR = "chat_index"
@@ -70,6 +71,24 @@ def get_qdrant_container_ports():
     except subprocess.CalledProcessError: 
         return "Error: docker ps failed" 
     
+def run_dstat(output_file):
+    #start dstat in the background to measure disk and cpu util at different points in the demo
+    if os.path.exists(output_file):
+        print(f"Warning: {output_file} already exists. dstat output will be concatenated to the end of this file")
+    return subprocess.Popen(
+        ["dstat", "--cpu", "--disk", "--page", "--mem", "--time", "--epoch", "--output", output_file, "1"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+    
+def run_pcm_memory(output_file):
+    with open(output_file, "w") as f:
+        return subprocess.Popen(
+            ["sudo", "/opt/pcm/sbin/pcm-memory", "1", "-all"],# "-csv"],
+            stdout=f,
+            stderr=subprocess.DEVNULL
+        )
+    
 #returns a tuple of doc_index, ingestion_time. If ingestion was skipped, ingestion_time will be None
 #this sort of only exists for debug purposes. In the future, persisting to and reading from disk could be useful
 #for benchmarking. But within the demo, ingestion must always be run to benchmark the ingestion time
@@ -118,7 +137,9 @@ def create_chat_history(vector_memory):
         vector_memory.put(msg)
 
 #takes in the name of the model to run and a list of the queries to pass into the pipeline
-def run_queries(model, queries, doc_data_dir):
+def run_queries(model, queries, doc_data_dir, benchmark_file_prefix):
+    dstat_process = run_dstat(f"{benchmark_file_prefix}_dstat.csv")
+    #pcm_memory_process = run_pcm_memory(f"{benchmark_file_prefix}_pcm_memory.csv")
     qdrant_container_ports = get_qdrant_container_ports()
     if len(qdrant_container_ports) < 2: 
         raise RuntimeError("At least two qdrant databases must be running")
@@ -162,6 +183,8 @@ def run_queries(model, queries, doc_data_dir):
 
     #model = args[1] #model name was passed as script arg from fmsdemo.py
     benchmark_df = build_and_run_pipeline(doc_index, pipeline_memory, queries, model)
+    dstat_process.send_signal(signal.SIGINT) #send a SIGINT specifically to make sure dstat finishes writing its output
+    #pcm_memory_process.send_signal(signal.SIGINT)
     ingest_time_col = []
     #create an ingestion time column (of the right length to match the df's rows) for the query runs of this configuration
     #ingestion only happens once, so all queries under the given demo configuration will be listed with the same time
