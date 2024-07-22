@@ -8,7 +8,7 @@ import argparse
 import time
     
 #demo-wide constants    
-DEMO_SCRIPTS = ["vectordb_manager.sh", "run_queries.py", "demo_cleanup.sh", "clear_qdrant_containers.sh"]
+DEMO_SCRIPTS = ["vectordb_manager.sh", "run_queries.py"]
 MOCK_CHAT_HISTORY_PATH = "mock_chat_history.csv"
 #this dict's values are lists that contain the command for how the dbs will be set up. Its
 #keys are what part of the demo the memory configuration is for/a short description of what the set up is
@@ -29,7 +29,8 @@ def demo_cleanup():
         subprocess.run(["sudo", "docker", "stop", container])
         time.sleep(3)
         subprocess.run(["sudo", "docker", "remove", container])
-    subprocess.run(["rm", "-r", DOC_INDEX_PERSIST_DIR])
+    if os.path.isdir(DOC_INDEX_PERSIST_DIR):
+        subprocess.run(["rm", "-r", DOC_INDEX_PERSIST_DIR])
 
 #need a separate function to just clear vector database containers without clearing the Ollama container
 def clear_databases():
@@ -58,7 +59,7 @@ if __name__ == "__main__":
     parser.add_argument("-c", "--cpu", action="store_true", dest="use_cpu", help="Specify Ollama to use cpu for inferencing (by default, Ollama will attempt to use a gpu)", default=False)
     parser.add_argument("-d", "--data", help="Specify the directory containing the document data to be ingested and indexed", default="../data")
     parser.add_argument("-m", "--model", help="Specify the model to use for inferencing", choices=["mistral:7b", "llama2", "llama3"], default="llama2")
-    parser.add_argument("-b", "--benchmark-dir", dest="benchmark_dir", help="Specify the directory to write benchmark data to", default="../benchmarks/")
+    parser.add_argument("-b", "--benchmark-dir", dest="benchmark_dir", help="Specify the directory to write benchmark data to. If the directory does not exist, it will be created", default="../benchmarks/")
     args = parser.parse_args()
 
     doc_data_dir = args.data
