@@ -180,5 +180,3 @@ def run_queries(model, queries, doc_data_dir):
     #collection already exists, but then will say it doesn't exist later. Metadata or something important
     #maybe stored in storage/collection? This may also only be because using the same local host volume mounted
     #to each of their storage dirs
-    
-started_processes = [] #track any started background processes to kill them if the program is interrupted
