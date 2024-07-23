@@ -6,7 +6,7 @@ type="qdrant"
 
 HOST_START_PORT=6333
 HOST_END_PORT=6400
-socket=""
+bindcpus=""
 membind=""
 memory_policy=""
 numactl_args=()
@@ -163,8 +163,8 @@ print_usage() {
     echo "-n, --num-instances NUM   Specify the number of vector database instances to start. Default: 1"
     #NOTE: type is not implemented yet!
     echo "-t, --type DB_TYPE        Specify the vector database type (qdrant, weaviate). Default: 'qdrant'"
-    echo "-s, --socket SOCKET       Bind vector database(s) to the specified CPU socket."
-#    echo "-b, --bindcpus CPUS       Bind vector database(s) to the specified range/list of CPUs (e.g., 0-7)."
+#    echo "-s, --socket SOCKET       Bind vector database(s) to the specified CPU socket."
+    echo "-b, --bindcpus CPUS       Bind vector database(s) to the specified range/list of CPUs (e.g., 0-7)."
     echo "-m, --membind NODE         Bind vector database(s) to the specified NUMA node memory."
     echo "-p, --memory-policy POLICY                            Specify the memory policy (preferred, interleave, weighted-interleave, kerneltpp)."
     echo "-v, --volume PATH         Specify the host volume path for persistent storage. Default: 'vectordb_data'"
@@ -193,10 +193,14 @@ while [[ $# -gt 0 ]]; do
         type="$2"
         shift 2
         ;;
-    -s|--socket)
-        socket="$2"
-        shift 2
-        ;;
+#    -s|--socket)
+#        socket="$2"
+#        numactl -H | awk '/node $num cpus:/ {print $4 "-" $NF}' #gets cpu range for socket at node num
+#        if implementing this, will need to make sure bindcpus also not specified. -s will just pass cpus
+#        for specified socket to docker bindcpus option
+#        or use numactl --cpunodebind (add that to numactl args, would still need to check -b not used)
+#        shift 2
+#        ;;
     -m|--membind)
         membind="$2"
         shift 2
@@ -205,11 +209,11 @@ while [[ $# -gt 0 ]]; do
         memory_policy="$2"
         shift 2
         ;;
-#    -b|--bindcpus)
-#        bindcpus="$2"
-#        b_flag=true
-#        shift 2
-#        ;;
+    -b|--bindcpus)
+        bindcpus="$2"
+        b_flag=true
+        shift 2
+        ;;
     -v|--volume)
         volume="$2"
         shift 2
@@ -234,9 +238,9 @@ for i in $(seq 1 $num_instances); do
                  #"-v $volume:/qdrant/storage"
                  "-p "$host_port":6333")
 
-    #If they were specified, add socket and memory binding arguments to the final command
-    [[ -n $socket ]] && docker_args+=("--cpuset-mems=$socket")
-    [[ -n $membind ]] && docker_args+=("--cpuset-cpus=${membind}")
+    #If they were specified, add cpu and memory binding arguments to the final command
+    [[ -n $bindcpus ]] && docker_args+=("--cpuset-cpus=${bindcpus}")
+    [[ -n $membind ]] && docker_args+=("--cpuset-mems=${membind}")
 
     docker_args+=("$image_name") #The image to run has to be passed in after the previous flags
 

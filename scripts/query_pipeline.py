@@ -12,8 +12,8 @@ from llama_index.core.llms import ChatMessage
 from llama_index.core.llms import MessageRole
 from llama_index.core.callbacks import CallbackManager
 from llama_index.core.callbacks import TokenCountingHandler
-import tiktoken
 import pandas as pd
+import tiktoken
 import time
 
 REWRITE_PROMPT = ChatPromptTemplate([
