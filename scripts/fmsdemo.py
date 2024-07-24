@@ -13,13 +13,14 @@ DEMO_SCRIPTS = ["vectordb_manager.sh", "run_queries.py"]
 MOCK_CHAT_HISTORY_PATH = "mock_chat_history.csv"
 #this dict's values are lists that contain the command for how the dbs will be set up. Its
 #keys are what part of the demo the memory configuration is for/a short description of what the set up is
-DEMO_DB_CONFIGS = {"DRAM only": ["./vectordb_manager.sh", "-n", "2", "-m", "1", "-b", "0"],
-                   "CXL only": ["./vectordb_manager.sh", "-n", "2", "-m", "2", "-b", "0"],
-                   "DRAM and CXL": ["./vectordb_manager.sh", "-n", "2", "-m", "1,2", "-b", "0"]}
+DEMO_DB_CONFIGS = {"DRAM only": ["./vectordb_manager.sh", "-m", "1", "-s", "1"],
+                   "CXL only": ["./vectordb_manager.sh", "-m", "2", "-s", "1"]}
+                   #"DRAM and CXL": ["./vectordb_manager.sh", "-n", "2", "-m", "1,2", "-b", "0"]}
 DOC_INDEX_PERSIST_DIR = "doc_index"
-QUERIES = ["What do the article's authors say about if scientists predicted the COVID pandemic?",
-           "I asked you before about what pandemic prevention methods the authors discuss. Could you answer that question again?",
-           "What was the first question I asked you today?"]
+QUERIES = ["What are some of the things Achilles did in Greek mythology?",
+           "I asked you a while ago about the etymology of the word anarchism. Could you answer that question again?",
+           "Did scientists predict the COVID 19 pandemic?",
+           "What was the first question I asked you during this session?"]
 
 def signal_handler(sig, frame):
     print("SIGINT sent")
@@ -53,7 +54,7 @@ def demo_cleanup():
     for container in created_containers:
         subprocess.run(["sudo", "docker", "stop", container])
         time.sleep(3)
-        subprocess.run(["sudo", "docker", "remove", container])
+        subprocess.run(["sudo", "docker", "remove", "-v", container])
     process_cleanup()
     if os.path.isdir(DOC_INDEX_PERSIST_DIR):
         subprocess.run(["rm", "-r", DOC_INDEX_PERSIST_DIR])
@@ -73,7 +74,7 @@ def clear_databases():
         if container != "ollama":
             subprocess.run(["sudo", "docker", "stop", container])
             time.sleep(3)
-            subprocess.run(["sudo", "docker", "remove", container])
+            subprocess.run(["sudo", "docker", "remove", "-v", container])
             created_containers.remove(container)
         else:
             i += 1
@@ -92,13 +93,19 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--data", help="Specify the directory containing the document data to be ingested and indexed. Default: ../data/", default="../data/")
     parser.add_argument("-m", "--model", help="Specify the model to use for inferencing. Default: llama2", choices=["mistral:7b", "llama2", "llama3"], default="llama2")
     parser.add_argument("-b", "--benchmark-dir", dest="benchmark_dir", help="Specify the directory to write benchmark data to. If the directory does not exist, it will be created. Default: ../benchmarks/", default="../benchmarks/")
+    #parser.add_argument("--doc-db-port")
+    parser.add_argument("--doc-db-collection")
+    #parser.add_argument("--chat-db-port")
+    parser.add_argument("--chat-db-collection")
 #    parser.add_argument("-r", "--reingest", action="store_true", dest="reingest", help="Specify to reingest documents into new databases between each demo configruation. This is off by default.", default=False)
     args = parser.parse_args()
 
     doc_data_dir = args.data
+    #move this to a validate args function. validate args also throws errors unless either all
+    #the db args are none or valid
     if not os.path.isdir(doc_data_dir):
         demo_cleanup()
-        raise RuntimeError("Invalid argument for -d. Please specify a valid directory which contains the documents to ingest. Absolute paths are needed for directories outside FMSDemo/scripts/")
+        raise argparse.ArgumentTypeError("Invalid argument for -d. Please specify a valid directory which contains the documents to ingest. Absolute paths are needed for directories outside FMSDemo/scripts/")
 
     benchmark_dir = args.benchmark_dir
     if not os.path.isdir(benchmark_dir):

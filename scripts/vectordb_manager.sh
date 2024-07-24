@@ -1,6 +1,6 @@
 #!/bin/bash
 
-num_instances=1
+num_instances=2
 volume="vectordb_data"
 type="qdrant"
 
@@ -8,6 +8,7 @@ HOST_START_PORT=6333
 HOST_END_PORT=6400
 bindcpus=""
 membind=""
+socket_cpus=""
 memory_policy=""
 numactl_args=()
 created_containers=()
@@ -160,14 +161,14 @@ set_numactl_args() {
 print_usage() {
     echo "Usage: vectordb_manager.py [options]"
     echo "Options:"
-    echo "-n, --num-instances NUM   Specify the number of vector database instances to start. Default: 1"
+    echo "-n, --num-instances NUM   Specify the number of vector database instances to start. Default: 2"
     #NOTE: type is not implemented yet!
     echo "-t, --type DB_TYPE        Specify the vector database type (qdrant, weaviate). Default: 'qdrant'"
 #    echo "-s, --socket SOCKET       Bind vector database(s) to the specified CPU socket."
     echo "-b, --bindcpus CPUS       Bind vector database(s) to the specified range/list of CPUs (e.g., 0-7)."
     echo "-m, --membind NODE         Bind vector database(s) to the specified NUMA node memory."
     echo "-p, --memory-policy POLICY                            Specify the memory policy (preferred, interleave, weighted-interleave, kerneltpp)."
-    echo "-v, --volume PATH         Specify the host volume path for persistent storage. Default: 'vectordb_data'"
+    echo "-v, --volume PATH         Specify the host volume path for persistent storage. Default: 'vectordb_data'. Volumes will be labeled numerically if multiple databases are being created."
     echo "-h, --help                Display this help message and exit."
     echo "Examples:"
     echo "   vectordb_manager.py -n 3 -t Qdrant --socket 0 --membind 1 -v /var/data/vectordb"
@@ -193,14 +194,14 @@ while [[ $# -gt 0 ]]; do
         type="$2"
         shift 2
         ;;
-#    -s|--socket)
-#        socket="$2"
-#        numactl -H | awk '/node $num cpus:/ {print $4 "-" $NF}' #gets cpu range for socket at node num
-#        if implementing this, will need to make sure bindcpus also not specified. -s will just pass cpus
-#        for specified socket to docker bindcpus option
-#        or use numactl --cpunodebind (add that to numactl args, would still need to check -b not used)
-#        shift 2
-#        ;;
+    -s|--socket)
+        socket_cpus=$(numactl -H | awk '/node '"$2"' cpus:/ {print $4 "-" $NF}') #gets cpu range for socket at node num in format n1-n2
+        if [[ -z $socket_cpus || $socket_cpus == "-cpus:" ]]; then
+            echo "No cpus found for socket $2"
+            exit 1
+        fi
+        shift 2
+        ;;
     -m|--membind)
         membind="$2"
         shift 2
@@ -211,7 +212,6 @@ while [[ $# -gt 0 ]]; do
         ;;
     -b|--bindcpus)
         bindcpus="$2"
-        b_flag=true
         shift 2
         ;;
     -v|--volume)
@@ -231,11 +231,19 @@ done
 
 set_db_type
 
+#check that -s and -b were not both used
+if [[ -n $socket_cpus && -n $bindcpus ]]; then
+    echo "--socket and --bindcpus cannot both be used at once!"
+    exit 1
+elif [[ -n $socket_cpus ]]; then
+    bindcpus=$socket_cpus #set the arg that will be passed to --cpuset-cpus to be the socket cpu range if only -s is specified
+fi
+
 for i in $(seq 1 $num_instances); do
     host_port=$(get_next_available_port)
     docker_args=("-d"
                  "--name="FMSDemo_db${i}""
-                 #"-v $volume:/qdrant/storage"
+                 #"-v $volume${i}:/qdrant/"
                  "-p "$host_port":6333")
 
     #If they were specified, add cpu and memory binding arguments to the final command
