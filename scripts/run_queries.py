@@ -23,7 +23,6 @@ import re
 import os
 
 DOC_DB_COLLECTION_NAME = "llamaindex_doc_db"
-CHAT_INDEX_PERSIST_DIR = "chat_index"
 CHAT_DB_COLLECTION_NAME = "llamaindex_chat_db"
 MOCK_CHAT_HISORY_LEN = 100
 #this list contains "past" messages related to the queries run in the demo that we want to be retrieved
@@ -40,7 +39,18 @@ RELEVANT_DEMO_HISTORY = [ChatMessage.from_str("Could you summarize the purpose o
                                             "7. Developing effective antivirals and, ideally, broadly protective vaccines against emerging viruses. Education and communication with populations where spillover events occur are also important components of risk reduction.\n"
                                             "8. Realizing that the problem is larger than just coronaviruses; they suggest focusing on other high-risk pathogens like henipaviruses, filoviruses, etc., and developing broadly protective vaccines and antiviral/antimicrobial agents against them.\n"
                                             "The authors also stress that investing more in critical and creative laboratory, field, and behavioral research is essential to prevent future pandemics. They suggest that pandemic prevention should be a global effort on a par with chemical and nuclear weapon prevention. \n"
-                                            "user: Can you elaborate more on the prevention methods the authors of the article outline?"), "assistant")]
+                                            "user: Can you elaborate more on the prevention methods the authors of the article outline?"), "assistant"),
+                        ChatMessage.from_str("Can you tell me about the etymology of the term anarchism?", "user"),
+                        ChatMessage.from_str(("Certainly! Based on the provided context, I can provide information on the etymology of the term \"anarchism.\""
+                                            "The term \"anarchism\" originates from the Ancient Greek words \"anarkhia\" (ἀναρχία) and \"arkhos\" (ἄρχος), which mean \"without a ruler\" or \"leader,\" respectively. The suffix \"-ism\" denotes the ideological current that favors anarchy."
+                                            "The first political philosopher to call himself an \"anarchist\" was Pierre-Joseph Proudhon in the mid-19th century, marking the formal birth of anarchism. However, as noted in the context, the term \"libertarianism\" has often been used as a synonym for anarchism, particularly outside the United States."
+                                            "Anarchism is contrasted to socialist forms that are state-oriented or from above, and scholars of anarchism generally highlight its socialist credentials while criticizing attempts to create dichotomies between the two."
+                                            "In summary, the term \"anarchism\" originates from Ancient Greek words and refers to a political philosophy that advocates for the abolition of authority and hierarchy, often in favor of voluntary free associations and stateless societies."), "assistant"),
+                        ChatMessage.from_str("Can you summarize some facts about industry in Alabama?", "user"),
+                        ChatMessage.from_str(("Based on the provided context, I can provide information on industry in Alabama. Alabama has a diverse industrial base, including the production of iron and steel products, paper, lumber, and wood products, mining (mainly coal), plastic products, cars, and trucks, and apparel. The state is also home to a growing automotive manufacturing industry, with several major auto manufacturers operating in the state, including Honda Manufacturing of Alabama, Hyundai Motor Manufacturing Alabama, Mercedes-Benz U.S. International, and Toyota Motor Manufacturing Alabama. In addition, the state is home to aerospace and electronic products, mostly in the Huntsville area, which is also home to NASA's George C. Marshall Space Flight Center and the U.S. Army Materiel Command."
+                                            "In recent years, the state has experienced significant growth in its steel industry, with Outokumpu, Nucor, SSAB, ThyssenKrupp, and U.S. Steel operating facilities in the state and employing over 10,000 people. The Hunt Refining Company, a subsidiary of Hunt Consolidated, Inc., operates a refinery in Tuscaloosa, while JVC America, Inc. operates an optical disc replication and packaging plant in the same city."
+                                            "The state has also seen an increase in tourism and entertainment, with attractions such as the Airbus A320 family aircraft assembly plant in Mobile, which was formally announced by Airbus CEO Fabrice Brégier in 2012 and began operating in 2015. The plant produces up to 50 aircraft per year by 2017."
+                                            "Overall, Alabama's economy has diversified over the years, with a mix of traditional and new industries driving growth and development in the state."), "assistant")]
 
 #enable debug logging
 #logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
@@ -74,9 +84,9 @@ def get_qdrant_container_ports():
 #returns a tuple of doc_index, ingestion_time. If ingestion was skipped, ingestion_time will be None
 #this sort of only exists for debug purposes. In the future, persisting to and reading from disk could be useful
 #for benchmarking. But within the demo, ingestion must always be run to benchmark the ingestion time
-def load_or_create_doc_index(doc_qdrant_client, doc_data_dir):
+def load_or_create_doc_index(doc_db_client, doc_data_dir):
     ingestion_time = None
-    doc_vector_store = QdrantVectorStore(client=doc_qdrant_client, collection_name=DOC_DB_COLLECTION_NAME)
+    doc_vector_store = QdrantVectorStore(client=doc_db_client, collection_name=DOC_DB_COLLECTION_NAME)
     if os.path.exists(DOC_INDEX_PERSIST_DIR):
         print("Document index found on disk. Loading existing index.")
         storage_context = StorageContext.from_defaults(persist_dir=DOC_INDEX_PERSIST_DIR, vector_store=doc_vector_store)
@@ -106,7 +116,7 @@ def load_or_create_doc_index(doc_qdrant_client, doc_data_dir):
 def create_chat_history(vector_memory):
     df = pd.read_csv(MOCK_CHAT_HISTORY_PATH)
     df = df[:MOCK_CHAT_HISORY_LEN] #more of a debug line. Only loads in part of the csv to reduce memory creation time for testing purposes
-    for i in tqdm(range(MOCK_CHAT_HISORY_LEN)): #df.iterrows() behaves weirdly with tqdm, so manually pull the rows instead 
+    for i in tqdm(range(MOCK_CHAT_HISORY_LEN), desc="Creating mock chat history"): #df.iterrows() behaves weirdly with tqdm, so manually pull the rows instead 
         row = df.iloc[i]
         msg = ChatMessage(role="user", content=row['question'])
         vector_memory.put(msg)
@@ -149,7 +159,6 @@ def run_queries(model, queries, doc_data_dir):
             collection_name=CHAT_DB_COLLECTION_NAME,
             vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE)
         )
-        print("Creating mock chat history")
         create_chat_history(vector_memory)
 
     #create composable memory
