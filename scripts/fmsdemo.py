@@ -125,13 +125,29 @@ def get_qdrant_container_ports():
     except subprocess.CalledProcessError: 
         return "Error: docker ps failed" 
 
+def check_for_ollama_container():
+    try:
+        #filter docker ps to only show port info of qdrant-based containers
+        result = subprocess.run(
+            ["sudo", "docker", "ps", "--format", "{{.Ports}}", "--filter", "ancestor=ollama/ollama"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+        if not result.stdout:
+            raise RuntimeError("An Ollama container must already be running!")
+    except subprocess.CalledProcessError: 
+        return "Error: docker ps failed" 
+
+
 #small wrapper to deal with running the db script and updating created_containers
 def start_vector_db(script_command, created_containers):
     print(f"Running vector db script: {script_command}")
     try:
         script_output = subprocess.run(script_command, capture_output=True, text=True, check=True)
     except subprocess.CalledProcessError:
-        print(f"Error trying to run vectordb_manager. Make sure ports 6333 and 6334 are free, no other running containers are mounted to any doc or chat db volumes, and no previous demo containers with conflicitng names exist")
+        print(f"Error trying to run vectordb_manager. Make sure ports 6333 and 6334 are free, no other running containers are mounted to any doc or chat db volumes, and no previous demo containers with conflicting names exist (whether running or stopped)")
         sys.exit()
     lines = script_output.stdout.split("\n")
     container_id = (lines[0].split())[-1]
@@ -145,7 +161,7 @@ def load_memory_from_volume(mem_config, chat_db_volume, chat_store_collection, c
     chat_db_client = QdrantClient(host="localhost", port=6334)
     chat_vector_store = QdrantVectorStore(client=chat_db_client, collection_name=chat_store_collection)
     vector_memory = VectorMemory.from_defaults(vector_store=chat_vector_store, 
-                                               retriever_kwargs={"similarity_top_k": 6000})
+                                               retriever_kwargs={"similarity_top_k": 6})
     for msg in RELEVANT_DEMO_HISTORY:
         vector_memory.put(msg)
     return vector_memory
@@ -204,6 +220,8 @@ def create_new_doc_index(mem_config, doc_data_dir, doc_store_collection, created
     return doc_index, ingestion_time
 
 if __name__ == "__main__":
+    check_for_ollama_container()
+
     created_containers = [] #keep track of what docker containers are made so they can be removed as needed (either for error cleanup or to restart databases)
     created_subprocesses = [] #keep track of what subprocesses are made for similar reasons
     signal.signal(signal.SIGINT, signal_handler)
@@ -212,7 +230,6 @@ if __name__ == "__main__":
         subprocess.run(["chmod", "+x", script])    
 
     parser = argparse.ArgumentParser()
-#    parser.add_argument("-c", "--cpu", action="store_true", dest="use_cpu", help="Specify Ollama to use cpu for inferencing (by default, Ollama will attempt to use a gpu)", default=False)
     parser.add_argument("-d", "--data", help="Specify the directory containing the document data to be ingested and indexed. Default: ../data/", default="../data/")
     parser.add_argument("-m", "--model", help="Specify the model to use for inferencing. Default: llama2", choices=["mistral:7b", "llama2", "llama3"], default="llama2")
     parser.add_argument("-b", "--benchmark-dir", dest="benchmark_dir", help="Specify the directory to write benchmark data to. If the directory does not exist, it will be created. Default: ../benchmarks/", default="../benchmarks/")
@@ -248,17 +265,9 @@ if __name__ == "__main__":
     model = args.model
     print(f"Starting Ollama container and {model} model")
     try:
-#        if args.use_cpu:
-#            subprocess.run(["sudo", "docker", "run", "-d", "-v", "ollama:/root/.ollama", "-p", "11434:11434", "--name", "ollama", 
-#                            "ollama/ollama"],
-#                            check=True)
-#        else:
-#            subprocess.run(["sudo", "docker", "run", "-d", "--gpus=all", "-v", "ollama:/root/.ollama", "-p", "11434:11434", "--name", "ollama", 
-#                            "ollama/ollama"], check=True)
         subprocess.run(["sudo", "docker", "exec", "-d", "ollama", "ollama", "run", model], check=True)
-#        created_containers.append("ollama")
     except subprocess.CalledProcessError:
-        print("Error: docker exec failed for the Ollama container") 
+        print("Error: docker exec failed to start the model in the Ollama container") 
         reset_demo()
         sys.exit()
 
@@ -267,22 +276,8 @@ if __name__ == "__main__":
     #run through each part of the demo
     for desc, mem_config in DEMO_DB_CONFIGS.items():
         print(f"Running demo with {desc}")
-#        print(f"Starting vector database containers with the following args: {args}")
-#
-#        try:
-#            vectordb_manager_result = subprocess.run(args, check=True, capture_output=True, text=True)
-#        except subprocess.CalledProcessError:
-#            print("Error trying to execute vectordb_manager.sh")
-#            reset_demo()
-#            sys.exit()
-#
-#        for line in vectordb_manager_result.stdout.split("\n"):
-#            print(line)
-#            words = line.split()
-#            if words: #script will output an empty line that we can't split and negatively index
-#                created_containers.append(words[-1])
 
-        benchmark_file_prefix = benchmark_dir + desc.replace(" ", "_") #want to create separate benchmark files for each demo config within the benchmark dir
+        benchmark_file_prefix = benchmark_dir + desc.replace(" ", "_") #create separate benchmark files for each demo config within the benchmark dir
         run_dstat(f"{benchmark_file_prefix}_dstat.csv")
 
         print("Setting up vector dbs and SimpleComposableMemory")
@@ -304,19 +299,6 @@ if __name__ == "__main__":
             primary_memory=chat_memory_buffer,
             secondary_memory_sources=[vector_memory]
         )
-        
-        #DONT FORGET TO CHANGE LOAD MEM FROM VOL TOP K
-        retriever = doc_index.as_retriever(similarity_top_k=60000)
-        
-#        start = time.perf_counter()
-#        nodes = retriever.retrieve("What are some of the things Achilles did in Greek mythology?0")
-#        end = time.perf_counter()
-#        print(f"Doc index: {end - start}")
-#
-#        start = time.perf_counter()
-#        vector_memory.get("What are some of the things Achilles did in Greek mythology?")
-#        end = time.perf_counter()
-#        print(f"Chat memory: {end - start}")
         
         from query_pipeline import build_and_run_pipeline
         benchmark_df = build_and_run_pipeline(doc_index, pipeline_memory, QUERIES, model)

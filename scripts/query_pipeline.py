@@ -171,7 +171,7 @@ def build_and_run_pipeline(doc_index, pipeline_memory, queries, model):
     print("Building RAG pipeline")
 
     #set up pipeline components
-    retriever = doc_index.as_retriever(similarity_top_k=1000)
+    retriever = doc_index.as_retriever(similarity_top_k=6)
     reranker = ColbertRerank(top_n=2)
 
     #build pipeline
