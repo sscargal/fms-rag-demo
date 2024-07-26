@@ -247,7 +247,7 @@ def build_and_run_pipeline(doc_index, pipeline_memory, queries, model):
             "document index retrieval tokens/sec": [benchmark_tracker.doc_retrieval_tps],
             "time to final result": [benchmark_tracker.pipeline_delta],
             "overall pipeline tokens/sec": [benchmark_tracker.pipeline_tps],
-            "response": [response]
+            #"response": [response]
         } 
         benchmark_df = pd.DataFrame.from_dict(data=benchmarks)    
         dfs.append(benchmark_df)

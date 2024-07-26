@@ -15,3 +15,5 @@ subprocess.run(["python", "-m", "wikiextractor.WikiExtractor", f"{DATA_DIR}enwik
                 "--output", f"{DATA_DIR}extracted_text/",
                 "--templates", f"{DATA_DIR}enwiki_dump_templates",
                 "--bytes", SUBSET_SIZE])
+
+print("Done!")

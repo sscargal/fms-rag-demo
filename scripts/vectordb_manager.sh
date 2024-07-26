@@ -1,7 +1,7 @@
 #!/bin/bash
 
-num_instances=2
-volume="vectordb_data"
+num_instances=1
+volume=""
 type="qdrant"
 
 HOST_START_PORT=6333
@@ -10,6 +10,7 @@ bindcpus=""
 membind=""
 socket_cpus=""
 memory_policy=""
+name=""
 numactl_args=()
 created_containers=()
 
@@ -168,7 +169,7 @@ print_usage() {
     echo "-b, --bindcpus CPUS       Bind vector database(s) to the specified range/list of CPUs (e.g., 0-7)."
     echo "-m, --membind NODE         Bind vector database(s) to the specified NUMA node memory."
     echo "-p, --memory-policy POLICY                            Specify the memory policy (preferred, interleave, weighted-interleave, kerneltpp)."
-    echo "-v, --volume PATH         Specify the host volume path for persistent storage. Default: 'vectordb_data'. Volumes will be labeled numerically if multiple databases are being created."
+    echo "-v, --volume PATH         Specify the host volume path for persistent storage. Volumes will be labeled numerically if multiple databases are being created."
     echo "-h, --help                Display this help message and exit."
     echo "Examples:"
     echo "   vectordb_manager.py -n 3 -t Qdrant --socket 0 --membind 1 -v /var/data/vectordb"
@@ -218,6 +219,14 @@ while [[ $# -gt 0 ]]; do
         volume="$2"
         shift 2
         ;;
+    --host-port)
+        host_port=$2
+        shift 2
+        ;;
+    --name)
+        name=$2
+        shift 2
+        ;;
     -h|--help)
         print_usage
         exit 0
@@ -233,22 +242,34 @@ set_db_type
 
 #check that -s and -b were not both used
 if [[ -n $socket_cpus && -n $bindcpus ]]; then
-    echo "--socket and --bindcpus cannot both be used at once!"
+    echo "--socket and --bindcpus cannot both be used at once!" >&2
     exit 1
 elif [[ -n $socket_cpus ]]; then
     bindcpus=$socket_cpus #set the arg that will be passed to --cpuset-cpus to be the socket cpu range if only -s is specified
 fi
 
 for i in $(seq 1 $num_instances); do
-    host_port=$(get_next_available_port)
+    #host_port=$(get_next_available_port)
+    
     docker_args=("-d"
-                 "--name="FMSDemo_db${i}""
-                 #"-v $volume${i}:/qdrant/"
                  "-p "$host_port":6333")
 
     #If they were specified, add cpu and memory binding arguments to the final command
     [[ -n $bindcpus ]] && docker_args+=("--cpuset-cpus=${bindcpus}")
     [[ -n $membind ]] && docker_args+=("--cpuset-mems=${membind}")
+    if [[ -n $volume ]]; then
+        if [[ $num_instances -gt 1 ]]; then 
+            docker_args+=("-v ${volume}${i}:/qdrant") #add number tags if making multiple databases
+        else
+            docker_args+=("-v $volume:/qdrant")
+        fi
+    fi
+    
+    if [[ -n $name ]]; then
+        docker_args+=("--name $name")
+    else
+        docker_args+=("--name FMSDemo_db${i}")
+    fi
 
     docker_args+=("$image_name") #The image to run has to be passed in after the previous flags
 
@@ -260,7 +281,8 @@ for i in $(seq 1 $num_instances); do
     fi
 
     if [[ $? -ne 0 ]]; then
-        error_cleanup #docker will output its own error messages automatically
+        echo $container_id #contains docker error output if a bad argument is passed
+        error_cleanup 
     else
         created_containers+=($container_id)
         echo "Created a new $type container using host port $host_port and with id $container_id"
