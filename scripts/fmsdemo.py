@@ -24,17 +24,17 @@ import time
 import json
     
 #demo-wide constants    
-DEMO_SCRIPTS = ["vectordb_manager.sh", "run_queries.py"]
+DEMO_SCRIPTS = ["vectordb_manager.sh"]
 #this dict's values are lists that contain the command for how the dbs will be set up. Its
 #keys are what part of the demo the memory configuration is for/a short description of what the set up is
-DEMO_DB_CONFIGS = {"DRAM only": ["-m", "1", "-s", "1"],
-                   "CXL only": ["-m", "2", "-s", "1"]}
+DEMO_DB_CONFIGS = {"CXL only": ["-m", "2", "-s", "1"],
+                   "DRAM only": ["-m", "1", "-s", "1"]}
                    #"DRAM and CXL": ["./vectordb_manager.sh", "-n", "2", "-m", "1,2", "-b", "0"]}
-DOC_INDEX_PERSIST_DIR = "doc_index"
+#DOC_INDEX_PERSIST_DIR = "doc_index"
 QUERIES = ["What are some of the things Achilles did in Greek mythology?",
-           "I told you a while ago what my favorite color is. Do you remember what I said?",
-           "Did scientists predict the COVID 19 pandemic?",
-           "What was the first question I asked you at the start of the current chat session?"]
+           "A while ago, I told you what my friend James' favorite color is. Could you remind me of what I had said?",
+           "What was the Fujiwara clan?",
+           "Did scientists predict the COVID 19 pandemic?"]
 #this list contains "past" messages related to the queries run in the demo that we want to be retrieved
 RELEVANT_DEMO_HISTORY = [ChatMessage.from_str("Could you summarize the purpose of the article for me?", "user"),
                          ChatMessage.from_str("The purpose of the article titled \"The origin of COVID-19\" appears to be discussing the emergence of the coronavirus pandemic and highlighting the need for increased understanding, surveillance, research, and prevention efforts to prevent future pandemics. The authors emphasize that this is necessary due to the growing threat posed by emerging and reemerging infectious agents in the natural world, many of which have yet to be identified and studied. They also discuss the importance of international collaboration, expanding research, changing human behaviors that increase contact with bats and other potential virus hosts, strengthening public health infrastructure, developing effective antivirals and vaccines, and investing in the development of broadly protective vaccines and therapeutic agents against taxonomic groups likely to emerge in the future.", "assistant"),
@@ -51,7 +51,7 @@ RELEVANT_DEMO_HISTORY = [ChatMessage.from_str("Could you summarize the purpose o
                                             "The authors also stress that investing more in critical and creative laboratory, field, and behavioral research is essential to prevent future pandemics. They suggest that pandemic prevention should be a global effort on a par with chemical and nuclear weapon prevention. \n"
                                             "user: Can you elaborate more on the prevention methods the authors of the article outline?"), "assistant"),
                         ChatMessage.from_str("Hello! How can I help you today?", "assistant"),
-                        ChatMessage.from_str("My favorite color is purple.", "user"),
+                        ChatMessage.from_str("My friend James' favorite color is purple.", "user"),
                         ChatMessage.from_str("Can you tell me about the etymology of the term anarchism?", "user"),
                         ChatMessage.from_str(("Certainly! Based on the provided context, I can provide information on the etymology of the term \"anarchism.\""
                                             "The term \"anarchism\" originates from the Ancient Greek words \"anarkhia\" (ἀναρχία) and \"arkhos\" (ἄρχος), which mean \"without a ruler\" or \"leader,\" respectively. The suffix \"-ism\" denotes the ideological current that favors anarchy."
@@ -63,6 +63,8 @@ RELEVANT_DEMO_HISTORY = [ChatMessage.from_str("Could you summarize the purpose o
                                             "In recent years, the state has experienced significant growth in its steel industry, with Outokumpu, Nucor, SSAB, ThyssenKrupp, and U.S. Steel operating facilities in the state and employing over 10,000 people. The Hunt Refining Company, a subsidiary of Hunt Consolidated, Inc., operates a refinery in Tuscaloosa, while JVC America, Inc. operates an optical disc replication and packaging plant in the same city."
                                             "The state has also seen an increase in tourism and entertainment, with attractions such as the Airbus A320 family aircraft assembly plant in Mobile, which was formally announced by Airbus CEO Fabrice Brégier in 2012 and began operating in 2015. The plant produces up to 50 aircraft per year by 2017."
                                             "Overall, Alabama's economy has diversified over the years, with a mix of traditional and new industries driving growth and development in the state."), "assistant")]
+DOC_DB_PORT = 7000
+CHAT_DB_PORT = 7001
 
 
 def signal_handler(sig, frame):
@@ -100,7 +102,7 @@ def reset_demo():
         time.sleep(3)
         subprocess.run(["sudo", "docker", "remove", container])
     created_containers.clear()
-    subprocess.run(["rm", "-r", DOC_INDEX_PERSIST_DIR]) #remove persisted index to force reingestion during next configuration
+    #subprocess.run(["rm", "-r", DOC_INDEX_PERSIST_DIR]) #remove persisted index to force reingestion during next configuration
 
     print("Removing any created background processes")
     for process in created_subprocesses:
@@ -152,13 +154,14 @@ def start_vector_db(script_command, created_containers):
     lines = script_output.stdout.split("\n")
     container_id = (lines[0].split())[-1]
     created_containers.append(container_id)    
+    time.sleep(5) #give the db time to set up
 
 def load_memory_from_volume(mem_config, chat_db_volume, chat_store_collection, created_containers):
     print(f"Creating new vector db with the data in {chat_db_volume}")
-    script_command = ["./vectordb_manager.sh", "--name", "FMSDemo_chat_db", "--host-port", "6334", "-v", chat_db_volume] + mem_config
+    script_command = ["./vectordb_manager.sh", "--name", "FMSDemo_chat_db", "--host-port", f"{CHAT_DB_PORT}", "-v", chat_db_volume] + mem_config
     start_vector_db(script_command, created_containers)
     
-    chat_db_client = QdrantClient(host="localhost", port=6334)
+    chat_db_client = QdrantClient(host="localhost", port=CHAT_DB_PORT)
     chat_vector_store = QdrantVectorStore(client=chat_db_client, collection_name=chat_store_collection)
     vector_memory = VectorMemory.from_defaults(vector_store=chat_vector_store, 
                                                retriever_kwargs={"similarity_top_k": 6})
@@ -168,10 +171,10 @@ def load_memory_from_volume(mem_config, chat_db_volume, chat_store_collection, c
     
 def create_new_chat_memory(mem_config, chat_store_collection, created_containers):
     print(f"Creating new vector db for chat messages")
-    script_command = ["./vectordb_manager.sh", "--name", "FMSDemo_chat_db", "--host-port", "6334"] + mem_config
+    script_command = ["./vectordb_manager.sh", "--name", "FMSDemo_chat_db", "--host-port", f"{CHAT_DB_PORT}"] + mem_config
     start_vector_db(script_command, created_containers)
 
-    chat_db_client = QdrantClient(host="localhost", port=6334)
+    chat_db_client = QdrantClient(host="localhost", port=CHAT_DB_PORT)
     chat_vector_store = QdrantVectorStore(client=chat_db_client, collection_name=chat_store_collection)
     vector_memory = VectorMemory.from_defaults(vector_store=chat_vector_store, 
                                                retriever_kwargs={"similarity_top_k": 6})
@@ -185,19 +188,19 @@ def create_new_chat_memory(mem_config, chat_store_collection, created_containers
 
 def load_index_from_volume(mem_config, doc_db_volume, doc_store_collection, created_containers):
     print(f"Creating new vector db with the data in {doc_db_volume}")
-    script_command = ["./vectordb_manager.sh", "--name", "FMSDemo_doc_db", "--host-port", "6333", "-v", doc_db_volume] + mem_config
+    script_command = ["./vectordb_manager.sh", "--name", "FMSDemo_doc_db", "--host-port", f"{DOC_DB_PORT}", "-v", doc_db_volume] + mem_config
     start_vector_db(script_command, created_containers)
-
-    doc_db_client = QdrantClient(host="localhost", port=6333) 
+    time.sleep(30)
+    doc_db_client = QdrantClient(host="localhost", port=DOC_DB_PORT)
     doc_vector_store = QdrantVectorStore(client=doc_db_client, collection_name=doc_store_collection)
     return VectorStoreIndex.from_vector_store(doc_vector_store)
 
 def create_new_doc_index(mem_config, doc_data_dir, doc_store_collection, created_containers):
     print("Creating new vector db to ingest into")
-    script_command = ["./vectordb_manager.sh", "--name", "FMSDemo_doc_db", "--host-port", "6333"] + mem_config
+    script_command = ["./vectordb_manager.sh", "--name", "FMSDemo_doc_db", "--host-port", f"{DOC_DB_PORT}"] + mem_config
     start_vector_db(script_command, created_containers)
 
-    doc_db_client = QdrantClient(host="localhost", port=6333) 
+    doc_db_client = QdrantClient(host="localhost", port=DOC_DB_PORT) 
     doc_vector_store = QdrantVectorStore(client=doc_db_client, collection_name=doc_store_collection)
     print("Loading data")
     documents = SimpleDirectoryReader(doc_data_dir).load_data()
@@ -263,7 +266,7 @@ if __name__ == "__main__":
     chat_store_collection = args.chat_store_collection
 
     model = args.model
-    print(f"Starting Ollama container and {model} model")
+    print(f"Starting {model} model in Ollama container")
     try:
         subprocess.run(["sudo", "docker", "exec", "-d", "ollama", "ollama", "run", model], check=True)
     except subprocess.CalledProcessError:
@@ -273,6 +276,7 @@ if __name__ == "__main__":
 
     benchmark_dfs = {}
 
+    Settings.embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-base-en-v1.5")     
     #run through each part of the demo
     for desc, mem_config in DEMO_DB_CONFIGS.items():
         print(f"Running demo with {desc}")
@@ -283,7 +287,6 @@ if __name__ == "__main__":
         print("Setting up vector dbs and SimpleComposableMemory")
         print("Setting up document vector db")
         ingestion_time = None
-        Settings.embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-base-en-v1.5")     
         if doc_db_volume:
             doc_index = load_index_from_volume(mem_config, doc_db_volume, doc_store_collection, created_containers)
         else:

@@ -12,7 +12,7 @@ from tqdm import tqdm
 import re
 
 MOCK_CHAT_HISTORY_PATH = "mock_chat_history.csv"
-CHAT_DB_PORT = 6800
+CHAT_DB_PORT = 9000
 
 Settings.embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-base-en-v1.5")
 df = pd.read_csv(MOCK_CHAT_HISTORY_PATH)
@@ -24,14 +24,15 @@ chat_db_client.create_collection(
     collection_name="llamaindex_chat_store",
     vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE)
 )
-for _, row in tqdm(df.iterrows(), desc="Creating mock chat history from csv"):
-   msg = ChatMessage(role="user", content=row["question"]) 
-   vector_memory.put(msg)
-   unparsed_answer = row["answers"] #csv answer col contains the actual answer and other info that needs to be removed
-   parsed_answer = re.search(r"(?<=\[).+?(?=\])", unparsed_answer).group(0) 
-   msg = ChatMessage(role="assistant", content=parsed_answer) 
-   vector_memory.put(msg)
-    
+for i in tqdm(range(0, len(df)), desc="Creating mock chat history from csv"):
+    row = df.iloc[i]
+    msg = ChatMessage(role="user", content=row["question"]) 
+    vector_memory.put(msg)
+    unparsed_answer = row["answers"] #csv answer col contains the actual answer and other info that needs to be removed
+    parsed_answer = re.search(r"(?<=\[).+?(?=\])", unparsed_answer).group(0) 
+    msg = ChatMessage(role="assistant", content=parsed_answer) 
+    vector_memory.put(msg)
+
 print("Sending test gets")
 print(vector_memory.get("Information about industry in Alabama"))
 print(vector_memory.get("Facts about Notre Dame"))
