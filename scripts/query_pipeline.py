@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-
+#NOTE: more prompt engineering is needed to get the context-enhanced query rewriting to work properly.
+#The LLM struggles to rewrite correctly with so much context from the different memory sources. LlamaIndex has an example
+#where two doc context retrievals are done: one with the original query and one with the rewritten.
+#Nodes from both retrievals are combined into one data structure and ranked. Don't use an ArgPack like they do: it doesnn't work. 
+#I could implement it with a FnComponent but I ran out of time
 from llama_index.core import Settings
 from llama_index.core import ChatPromptTemplate
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
@@ -16,21 +20,21 @@ import pandas as pd
 import tiktoken
 import time
 
-REWRITE_PROMPT = ChatPromptTemplate([
-    ChatMessage(
-        role=MessageRole.SYSTEM,
-        content = (
-        "Write a query to a semantic search engine using context from the given chat history. "
-        "Your query should capture the full intent of the user's message. Do not answer the content of the user's message yourself."
-        "Merely rewrite the user's query in such a way that another engine could successfully answer what the user intends to ask."
-        "\n"
-        "Chat history: {chat_history_str}"
-        "\n"
-        "Latest user message: {query_str}\n"
-        'Query:"""\n'
-        )
-    )
-])
+#REWRITE_PROMPT = ChatPromptTemplate([
+#    ChatMessage(
+#        role=MessageRole.SYSTEM,
+#        content = (
+#        "Write a query to a semantic search engine using context from the given chat history. "
+#        "Your query should capture the full intent of the user's message. Do not answer the user's message yourself."
+#        "Rather, rewrite the user's query in such a way that another engine could successfully answer what the user intends to ask."
+#        "\n"
+#        "Chat history: {chat_history_str}"
+#        "\n"
+#        "Latest user message: {query_str}\n"
+#        'Query:"""\n'
+#        )
+#    )
+#])
     
 SYSTEM_PROMPT = ChatPromptTemplate([
     ChatMessage(
@@ -65,7 +69,7 @@ CONTEXT_PROMPT = ChatPromptTemplate([
 ])
 
 #by default, SimpleComposableMemory's .get() method returns a strangely formatted composition of the primary and secondary sources (with primary
-#being listed later and after a statement that the history has ended). This function reparses .get()'s output
+#being listed later and after a statement that the history has ended). This function reparses that output
 def get_chat_history_str(query_str, pipeline_memory, benchmark_tracker):
     start_time = time.perf_counter()
     retrieved_memory = pipeline_memory.get(query_str)
@@ -106,13 +110,12 @@ def get_chat_history_str(query_str, pipeline_memory, benchmark_tracker):
     #passing in a query to .get() will activate primary and secondary memory retrievers with the settings
     #they were configured with, eg top_k vectors to return. This is important for not exceeding context size
 
-def rewrite_query(query_str, chat_history_str, llm):
-    rewrite_input = REWRITE_PROMPT.format(chat_history_str=chat_history_str, query_str=query_str)
-    rewritten_query = llm.complete(rewrite_input)
-    #rewritten_query = "COVID COVID COVID DEBUG"
-    return str(rewritten_query)
+#def rewrite_query(query_str, chat_history_str, llm):
+#    rewrite_input = REWRITE_PROMPT.format(chat_history_str=chat_history_str, query_str=query_str)
+#    rewritten_query = llm.complete(rewrite_input)
+#    return str(rewritten_query)
     
-#this function gives timing control over retrieval rather than just having the retriever itself as a module in the pipeline
+#this function gives timing control over retrieval which isn't possible if using the retriever as its own pipeline module
 def doc_index_retrieve(query_str, retriever, benchmark_tracker):
     start_time = time.perf_counter() 
     nodes = retriever.retrieve(query_str)
@@ -166,20 +169,20 @@ def synthesize_response(query_str, retrieved_nodes, chat_history_str, benchmark_
 
     return str(response)
 
-
-def build_and_run_pipeline(doc_index, pipeline_memory, queries, model):
+#return tuple of response and row of data to add to the benchmark dataframe for the given query
+def build_and_run_pipeline(query, doc_index, pipeline_memory, model):
     print("Building RAG pipeline")
 
     #set up pipeline components
     retriever = doc_index.as_retriever(similarity_top_k=6)
-    reranker = ColbertRerank(top_n=2)
+    reranker = ColbertRerank(top_n=1) #top_n determines the amount of doc context chunks in the final combined prompt
 
     #build pipeline
     pipeline = QueryPipeline(
         modules={
             "input": InputComponent(),
             "memory_retriever": FnComponent(get_chat_history_str),
-            "rewriter": FnComponent(rewrite_query),
+#            "rewriter": FnComponent(rewrite_query),
             "query_retriever": FnComponent(doc_index_retrieve), 
             "reranker": reranker,
             "synthesizer": FnComponent(synthesize_response),
@@ -191,14 +194,15 @@ def build_and_run_pipeline(doc_index, pipeline_memory, queries, model):
     pipeline.add_link("input", "query_retriever", src_key="benchmark_tracker", dest_key="benchmark_tracker")
     pipeline.add_link("input", "synthesizer", src_key="benchmark_tracker", dest_key="benchmark_tracker")
 
-    pipeline.add_link("input", "rewriter", src_key="query_str", dest_key="query_str")
+#    pipeline.add_link("input", "rewriter", src_key="query_str", dest_key="query_str")
     pipeline.add_link("input", "memory_retriever", src_key="query_str", dest_key="query_str")
     pipeline.add_link("input", "memory_retriever", src_key="pipeline_memory", dest_key="pipeline_memory")
-    pipeline.add_link("input", "rewriter", src_key="llm", dest_key="llm")
-    pipeline.add_link("memory_retriever", "rewriter", dest_key="chat_history_str") #send context from memory to use in query rewrite 
+#    pipeline.add_link("input", "rewriter", src_key="llm", dest_key="llm")
+#    pipeline.add_link("memory_retriever", "rewriter", dest_key="chat_history_str") #send context from memory to use in query rewrite 
 
     pipeline.add_link("input", "query_retriever", src_key="retriever", dest_key="retriever")
-    pipeline.add_link("rewriter", "query_retriever", dest_key="query_str") #rewrite user query and retrieve context using that
+    pipeline.add_link("input", "query_retriever", src_key="query_str", dest_key="query_str")
+#    pipeline.add_link("rewriter", "query_retriever", dest_key="query_str") #rewrite user query and retrieve context using that
 
     #rank the retrieved nodes
     pipeline.add_link("query_retriever", "reranker", dest_key="nodes")
@@ -213,47 +217,43 @@ def build_and_run_pipeline(doc_index, pipeline_memory, queries, model):
 
     print("Running queries")
     benchmark_tracker = BenchmarkTracker()
-    dfs = [] 
     
-    print(f"DEBUG Model being used is: {model}")
-    llm = Ollama(model=model, base_url="http://localhost:11434", request_timeout=600.0)
+    print(f"Model being used is: {model}")
+    llm = Ollama(model=model, base_url="http://localhost:11434", request_timeout=120.0)
 
-    for query in queries:
-        print(f"QUERY: {query}")
-        pipeline_start_time = time.perf_counter()
-        print(f"Pipeline starting time: {pipeline_start_time:.6f}")
-        benchmark_tracker.pipeline_start_time = pipeline_start_time 
+    print(f"QUERY: {query}")
+    pipeline_start_time = time.perf_counter()
+    print(f"Pipeline starting time: {pipeline_start_time:.6f}")
+    benchmark_tracker.pipeline_start_time = pipeline_start_time 
 
-        response = pipeline.run(
-            query_str=query,
-            retriever=retriever,
-            pipeline_memory=pipeline_memory,
-            llm=llm,
-            benchmark_tracker=benchmark_tracker
-        )
-        print(f"PIPELINE OUTPUT: {response}")
+    response = pipeline.run(
+        query_str=query,
+        retriever=retriever,
+        pipeline_memory=pipeline_memory,
+        llm=llm,
+        benchmark_tracker=benchmark_tracker
+    )
+    print(f"PIPELINE OUTPUT: {response}")
 
-        #update memory
-        user_msg = ChatMessage(role="user", content=query)
-        pipeline_memory.put(user_msg)
-        response_msg = ChatMessage(role="assistant", content=response)
-        pipeline_memory.put(response_msg)
-        
-        benchmarks = {
-            "query": [query],
-            "composable memory retrieval time": [benchmark_tracker.memory_retrieval_time],
-            "composable memory retrieval tokens/sec": [benchmark_tracker.memory_retrieval_tps],
-            "document index retrieval time": [benchmark_tracker.doc_retrieval_time],
-            "document index retrieval tokens/sec": [benchmark_tracker.doc_retrieval_tps],
-            "time to final result": [benchmark_tracker.pipeline_delta],
-            "overall pipeline tokens/sec": [benchmark_tracker.pipeline_tps],
-            #"response": [response]
-        } 
-        benchmark_df = pd.DataFrame.from_dict(data=benchmarks)    
-        dfs.append(benchmark_df)
-        benchmark_tracker.reset() 
-    #merge the individual dataframes from each pipeline run together
-    return(pd.concat(dfs, ignore_index=True)) 
+    #update memory
+    user_msg = ChatMessage(role="user", content=query)
+    pipeline_memory.put(user_msg)
+    response_msg = ChatMessage(role="assistant", content=response)
+    pipeline_memory.put(response_msg)
+    
+    benchmarks = {
+        "query": [query],
+        "composable memory retrieval time": [benchmark_tracker.memory_retrieval_time],
+        "composable memory retrieval tokens/sec": [benchmark_tracker.memory_retrieval_tps],
+        "document index retrieval time": [benchmark_tracker.doc_retrieval_time],
+        "document index retrieval tokens/sec": [benchmark_tracker.doc_retrieval_tps],
+        "time to final result": [benchmark_tracker.pipeline_delta],
+        "overall pipeline tokens/sec": [benchmark_tracker.pipeline_tps],
+        #"response": [response]
+    } 
+    benchmark_df_row = pd.DataFrame.from_dict(data=benchmarks)    
+    benchmark_tracker.reset() 
+    return response, benchmark_df_row 
 
 #FnComponent modules can only have one output key, so additional tracking outputs from each module have
 #to be stored in some other structure in order to be accessed by other parts of the pipeline

@@ -12,30 +12,16 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client import models
 from llama_index.vector_stores.qdrant import QdrantVectorStore
-from tqdm import tqdm
-import pandas as pd #user will have to manually source python VE before running script (unless there's a way to programatically do this)
+from query_pipeline import build_and_run_pipeline
+import pandas as pd 
+import streamlit as st
 import subprocess
-import sys
 import signal
 import os
 import re
-import argparse
 import time
-import json
     
-#demo-wide constants    
-DEMO_SCRIPTS = ["vectordb_manager.sh"]
-#this dict's values are lists that contain the command for how the dbs will be set up. Its
-#keys are what part of the demo the memory configuration is for/a short description of what the set up is
-DEMO_DB_CONFIGS = {"CXL only": ["-m", "2", "-s", "1"],
-                   "DRAM only": ["-m", "1", "-s", "1"]}
-                   #"DRAM and CXL": ["./vectordb_manager.sh", "-n", "2", "-m", "1,2", "-b", "0"]}
-#DOC_INDEX_PERSIST_DIR = "doc_index"
-QUERIES = ["What are some of the things Achilles did in Greek mythology?",
-           "A while ago, I told you what my friend James' favorite color is. Could you remind me of what I had said?",
-           "What was the Fujiwara clan?",
-           "Did scientists predict the COVID 19 pandemic?"]
-#this list contains "past" messages related to the queries run in the demo that we want to be retrieved
+#this list contains "past" messages related to the documents in the demo that we want to be retrieved
 RELEVANT_DEMO_HISTORY = [ChatMessage.from_str("Could you summarize the purpose of the article for me?", "user"),
                          ChatMessage.from_str("The purpose of the article titled \"The origin of COVID-19\" appears to be discussing the emergence of the coronavirus pandemic and highlighting the need for increased understanding, surveillance, research, and prevention efforts to prevent future pandemics. The authors emphasize that this is necessary due to the growing threat posed by emerging and reemerging infectious agents in the natural world, many of which have yet to be identified and studied. They also discuss the importance of international collaboration, expanding research, changing human behaviors that increase contact with bats and other potential virus hosts, strengthening public health infrastructure, developing effective antivirals and vaccines, and investing in the development of broadly protective vaccines and therapeutic agents against taxonomic groups likely to emerge in the future.", "assistant"),
                          ChatMessage.from_str("Can you elaborate more on the prevention methods the authors of the article outline?", "user"),
@@ -66,13 +52,9 @@ RELEVANT_DEMO_HISTORY = [ChatMessage.from_str("Could you summarize the purpose o
 DOC_DB_PORT = 7000
 CHAT_DB_PORT = 7001
 
-
-def signal_handler(sig, frame):
-    print("SIGINT sent")
-    time.sleep(5)
-    reset_demo()
-    sys.exit(0)
-
+#note that dstat and pcm memory are currently not run during the demo. Call these functions
+#to add that functionality, but beware that they can easily leak if the script gets interrupted
+#with an unexpected error
 def run_dstat(output_file):
     #start dstat in the background to measure disk and cpu util at different points in the demo
     print(f"Starting a background dstat process and writing results to {output_file}")
@@ -83,7 +65,7 @@ def run_dstat(output_file):
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL
     )
-    created_subprocesses.append(process)
+    st.session_state.created_subprocesses.append(process)
     
 def run_pcm_memory(output_file):
     with open(output_file, "w") as f:
@@ -92,234 +74,330 @@ def run_pcm_memory(output_file):
             stdout=f,
             stderr=subprocess.DEVNULL
         )
-        created_subprocesses.append(process)
+        st.session_state.created_subprocesses.append(process)
 
-#need a separate function to just clear vector database containers without clearing the Ollama container
 def reset_demo():
-    print("Clearing vector db containers")
-    for container in created_containers:
-        subprocess.run(["sudo", "docker", "stop", container])
-        time.sleep(3)
-        subprocess.run(["sudo", "docker", "remove", container])
-    created_containers.clear()
-    #subprocess.run(["rm", "-r", DOC_INDEX_PERSIST_DIR]) #remove persisted index to force reingestion during next configuration
+    if "created_containers" in st.session_state:
+        print("Clearing vector db containers")
+        for container in st.session_state.created_containers:
+            subprocess.run(["sudo", "docker", "stop", container])
+            time.sleep(3)
+            subprocess.run(["sudo", "docker", "remove", container])
+        st.session_state.created_containers.clear()
 
-    print("Removing any created background processes")
-    for process in created_subprocesses:
-        print(f"Terminating {process}")
-        process.send_signal(signal.SIGINT) #send SIGINT specifically to let commands write their outputs to files
-
+    if "created_subprocesses" in st.session_state:
+        print("Removing any created background processes")
+        for process in st.session_state.created_subprocesses:
+            print(f"Terminating {process}")
+            process.send_signal(signal.SIGINT) #send SIGINT specifically to let commands write their outputs to files
+            
+    if "messages" in st.session_state:
+        print("Clearing session state message history")
+        st.session_state.messages.clear()
    
-def get_qdrant_container_ports():
-    try:
-        #filter docker ps to only show port info of qdrant-based containers
-        result = subprocess.run(
-            ["sudo", "docker", "ps", "--format", "{{.Ports}}", "--filter", "ancestor=qdrant/qdrant"],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        
-        #parse docker ps output to get container host ports and return a list of those unique ports
-        ports = list(set(re.findall(r'(?<=:)\d+(?=->)', result.stdout)))
-        ports.sort()
-        return ports
-    except subprocess.CalledProcessError: 
-        return "Error: docker ps failed" 
-
 def check_for_ollama_container():
     try:
-        #filter docker ps to only show port info of qdrant-based containers
         result = subprocess.run(
-            ["sudo", "docker", "ps", "--format", "{{.Ports}}", "--filter", "ancestor=ollama/ollama"],
+            ["sudo", "docker", "ps", "--filter", "ancestor=ollama/ollama"],
             capture_output=True,
             text=True,
             check=True
         )
 
         if not result.stdout:
-            raise RuntimeError("An Ollama container must already be running!")
+            raise RuntimeError("An Ollama container must already be running! Please start a docker container with your desired settings and refresh the page")
     except subprocess.CalledProcessError: 
         return "Error: docker ps failed" 
 
-
-#small wrapper to deal with running the db script and updating created_containers
-def start_vector_db(script_command, created_containers):
-    print(f"Running vector db script: {script_command}")
+def start_vector_db(docker_command):
+    print(f"Running the following command: {docker_command}")
+    st.text("Creating database container")
+    command_result = None
     try:
-        script_output = subprocess.run(script_command, capture_output=True, text=True, check=True)
+        command_result = subprocess.run(docker_command, capture_output=True, text=True, check=True)
     except subprocess.CalledProcessError:
-        print(f"Error trying to run vectordb_manager. Make sure ports 6333 and 6334 are free, no other running containers are mounted to any doc or chat db volumes, and no previous demo containers with conflicting names exist (whether running or stopped)")
-        sys.exit()
-    lines = script_output.stdout.split("\n")
-    container_id = (lines[0].split())[-1]
-    created_containers.append(container_id)    
-    time.sleep(5) #give the db time to set up
-
-def load_memory_from_volume(mem_config, chat_db_volume, chat_store_collection, created_containers):
-    print(f"Creating new vector db with the data in {chat_db_volume}")
-    script_command = ["./vectordb_manager.sh", "--name", "FMSDemo_chat_db", "--host-port", f"{CHAT_DB_PORT}", "-v", chat_db_volume] + mem_config
-    start_vector_db(script_command, created_containers)
+        raise RuntimeError(f"Error trying to run {docker_command}. Are the host port and container name available?")
+    container_id = command_result.stdout.strip()
+    print(f"Created container id: {container_id}")
+    st.session_state.created_containers.append(container_id)    
+    #extract the host port bound to container port 6333
+    command_result = subprocess.run(["sudo", "docker", "inspect",
+                                     "--format={{(index (index .NetworkSettings.Ports \"6333/tcp\") 0).HostPort}}",
+                                     container_id], capture_output=True, text=True)
+    port = command_result.stdout.strip()
+    #couldn't find a good command to use for a docker healthcheck, so check for when the database is ready by testing the client connection
+    with st.spinner("Starting vector database"):
+        st.text("Letting the database warm up")
+        time.sleep(5)
+        MAX_ATTEMPTS = 5
+        ATTEMPT_DELAY = 10
+        st.text("Connecting to the database")
+        
+        client = QdrantClient(host="localhost", port=port)
+        print(f"Host port connected to container: {port}")
+        for i in range(0, MAX_ATTEMPTS):
+            st.text(f"Attempt {i+1}")
+            try:
+                client.get_collections()
+                st.success("Connected to database!")
+                return client
+            except:
+                st.text(f"Connection failed. Retrying in {ATTEMPT_DELAY} seconds")
+            time.sleep(ATTEMPT_DELAY)
+        
+        raise RuntimeError("Couldn't connect to the created database")
     
-    chat_db_client = QdrantClient(host="localhost", port=CHAT_DB_PORT)
+def validate_collection(client, collection):
+    collections = client.get_collections()
+    if collection not in [collection.name for collection in collections.collections]:
+        reset_demo()
+        raise RuntimeError(f"The collection {collection} wasn't found in the database!")
+
+#the similarity_top_k args passed in both chat memory creation functions will determine the final
+#amount of messages retrieved from the db by the pipeline (ie there is no reranking to a smaller number)
+def load_chat_memory_from_volume(mem_config, chat_db_volume, chat_store_collection):
+    st.text(f"Loading the data in {chat_db_volume} into a database container")
+    docker_command = ["sudo", "docker", "run", "-d", "--name", "FMSDemo_chat_db", "-p", f"{CHAT_DB_PORT}:6333", "-v", f"{chat_db_volume}:/qdrant"] + mem_config + ["qdrant/qdrant"]
+    chat_db_client = start_vector_db(docker_command)
+    validate_collection(chat_db_client, chat_store_collection)
     chat_vector_store = QdrantVectorStore(client=chat_db_client, collection_name=chat_store_collection)
     vector_memory = VectorMemory.from_defaults(vector_store=chat_vector_store, 
-                                               retriever_kwargs={"similarity_top_k": 6})
+                                               retriever_kwargs={"similarity_top_k": 2})
+    st.text("Putting relevant demo messages into database")
     for msg in RELEVANT_DEMO_HISTORY:
         vector_memory.put(msg)
+    st.success("Loading complete!")
     return vector_memory
     
-def create_new_chat_memory(mem_config, chat_store_collection, created_containers):
-    print(f"Creating new vector db for chat messages")
-    script_command = ["./vectordb_manager.sh", "--name", "FMSDemo_chat_db", "--host-port", f"{CHAT_DB_PORT}"] + mem_config
-    start_vector_db(script_command, created_containers)
-
-    chat_db_client = QdrantClient(host="localhost", port=CHAT_DB_PORT)
-    chat_vector_store = QdrantVectorStore(client=chat_db_client, collection_name=chat_store_collection)
+def create_new_chat_memory(mem_config):
+    st.text(f"Creating new vector database for chat messages")
+    docker_command = ["sudo", "docker", "run", "-d", "--name", "FMSDemo_chat_db", "-p", f"{CHAT_DB_PORT}:6333"] + mem_config + ["qdrant/qdrant"]
+    chat_db_client = start_vector_db(docker_command)
+    #just like create_new_doc_index, the collection name is a nonfactor when creating from scratch
+    chat_vector_store = QdrantVectorStore(client=chat_db_client, collection_name="llamaindex_chat_store")
     vector_memory = VectorMemory.from_defaults(vector_store=chat_vector_store, 
-                                               retriever_kwargs={"similarity_top_k": 6})
+                                               retriever_kwargs={"similarity_top_k": 2})
     chat_db_client.create_collection(
-        collection_name=chat_store_collection,
+        collection_name="llamaindex_chat_store",
         vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE)
     )
     for msg in RELEVANT_DEMO_HISTORY:
         vector_memory.put(msg)
+    st.success("Creation complete!")
     return vector_memory
 
-def load_index_from_volume(mem_config, doc_db_volume, doc_store_collection, created_containers):
-    print(f"Creating new vector db with the data in {doc_db_volume}")
-    script_command = ["./vectordb_manager.sh", "--name", "FMSDemo_doc_db", "--host-port", f"{DOC_DB_PORT}", "-v", doc_db_volume] + mem_config
-    start_vector_db(script_command, created_containers)
-    time.sleep(30)
-    doc_db_client = QdrantClient(host="localhost", port=DOC_DB_PORT)
+def load_doc_index_from_volume(mem_config, doc_db_volume, doc_store_collection):
+    st.text(f"Loading the data in {doc_db_volume} into a database container")
+    docker_command = ["sudo", "docker", "run", "-d", "--name", "FMSDemo_doc_db", "-p", f"{DOC_DB_PORT}:6333", "-v", f"{doc_db_volume}:/qdrant"] + mem_config + ["qdrant/qdrant"]
+    doc_db_client = start_vector_db(docker_command)
+    validate_collection(doc_db_client, doc_store_collection)
     doc_vector_store = QdrantVectorStore(client=doc_db_client, collection_name=doc_store_collection)
+    st.success("Loading complete!")
     return VectorStoreIndex.from_vector_store(doc_vector_store)
 
-def create_new_doc_index(mem_config, doc_data_dir, doc_store_collection, created_containers):
-    print("Creating new vector db to ingest into")
-    script_command = ["./vectordb_manager.sh", "--name", "FMSDemo_doc_db", "--host-port", f"{DOC_DB_PORT}"] + mem_config
-    start_vector_db(script_command, created_containers)
-
-    doc_db_client = QdrantClient(host="localhost", port=DOC_DB_PORT) 
-    doc_vector_store = QdrantVectorStore(client=doc_db_client, collection_name=doc_store_collection)
-    print("Loading data")
-    documents = SimpleDirectoryReader(doc_data_dir).load_data()
+#returns a tuple of the created doc index and ingestion time to create it
+def create_new_doc_index(mem_config, doc_data_dir):
+    st.text("Creating new vector database to ingest documents into")
+    docker_command = ["sudo", "docker", "run", "--name", "FMSDemo_doc_db", "-p", f"{DOC_DB_PORT}:6333", "-d"] + mem_config + ["qdrant/qdrant"]
+    doc_db_client = start_vector_db(docker_command)
+    #when creating the collection from scratch, just give it a random name. It won't affect the index creation
+    doc_vector_store = QdrantVectorStore(client=doc_db_client, collection_name="llamaindex_doc_store")
     storage_context = StorageContext.from_defaults(vector_store=doc_vector_store)
-    start_time = time.perf_counter()
-    print(f"Starting ingestion. Starting time: {start_time}")
+    with st.spinner("Loading documents"):
+        documents = SimpleDirectoryReader(doc_data_dir).load_data()
 
-    doc_index = VectorStoreIndex.from_documents(
-        documents,
-        storage_context=storage_context,
-        show_progress=True
-    )
+    start_time = time.perf_counter()
+    print(f"Ingestion starting time: {start_time}")
+    with st.spinner("Ingesting documents into database and creating index"):
+        doc_index = VectorStoreIndex.from_documents(
+            documents,
+            storage_context=storage_context,
+            show_progress=True
+        )
 
     end_time = time.perf_counter()
-    print(f"Ingestion complete. Ending time: {end_time}")
+    print(f"Ingestion ending time: {end_time}")
     ingestion_time = end_time - start_time
-    print(f"Total ingestion time: {ingestion_time:.6f} seconds")
-#    print("Persisting created index to disk.")
-#    doc_index.storage_context.persist(persist_dir=DOC_INDEX_PERSIST_DIR)
+    st.success(f"Ingestion complete! Total ingestion time: {ingestion_time:.6f} seconds")
     return doc_index, ingestion_time
 
-if __name__ == "__main__":
-    check_for_ollama_container()
+#function that deals with all the logic of deciding how to set up the doc and chat dbs based
+#on the options entered by the user (ie preload vs create from scratch for each)
+def set_up_databases(doc_data_dir, doc_db_volume, doc_store_collection, 
+                     chat_db_volume, chat_store_collection, 
+                     mem_config):
+ 
+    st.session_state.ingestion_time = None
+    with st.status(":orange[**Setting up document vector database**]", expanded=True) as status:
+        if doc_db_volume:
+            st.session_state.doc_index = load_doc_index_from_volume(mem_config, doc_db_volume, doc_store_collection)
+        else:
+            st.session_state.doc_index, st.session_state.ingestion_time = create_new_doc_index(mem_config, doc_data_dir) 
+    time.sleep(2)
+    status.update(label=":green[Set up document vector database]", expanded=False, state="complete")
+    
+    with st.status(":orange[**Setting up chat vector database**]", expanded=True) as status:
+        if chat_db_volume:
+            past_chat_memory = load_chat_memory_from_volume(mem_config, chat_db_volume, chat_store_collection)
+        else:
+            past_chat_memory = create_new_chat_memory(mem_config)
+    time.sleep(2)
+    status.update(label=":green[Set up chat vector database]", expanded=False, state="complete")
 
-    created_containers = [] #keep track of what docker containers are made so they can be removed as needed (either for error cleanup or to restart databases)
-    created_subprocesses = [] #keep track of what subprocesses are made for similar reasons
-    signal.signal(signal.SIGINT, signal_handler)
+    chat_memory_buffer = ChatMemoryBuffer.from_defaults(token_limit=1000)
+    st.session_state.pipeline_memory = SimpleComposableMemory.from_defaults(
+        primary_memory=chat_memory_buffer,
+        secondary_memory_sources=[past_chat_memory]
+    )
+    print("Doc index and composable memory object saved to session state")
 
-    for script in DEMO_SCRIPTS:
-        subprocess.run(["chmod", "+x", script])    
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-d", "--data", help="Specify the directory containing the document data to be ingested and indexed. Default: ../data/", default="../data/")
-    parser.add_argument("-m", "--model", help="Specify the model to use for inferencing. Default: llama2", choices=["mistral:7b", "llama2", "llama3"], default="llama2")
-    parser.add_argument("-b", "--benchmark-dir", dest="benchmark_dir", help="Specify the directory to write benchmark data to. If the directory does not exist, it will be created. Default: ../benchmarks/", default="../benchmarks/")
-    parser.add_argument("--doc-db-volume", dest="doc_db_volume", help="Specify a docker volume containing a vector store of the ingested documents. db containers will be loaded with the volume's contents to avoid reingestion.")
-    parser.add_argument("--doc-store-collection", dest="doc_store_collection", help="If loading a database from a volume, specify the name of the collection within the database containing the ingested documents vector store.", default="llamaindex_doc_store")
-    parser.add_argument("--chat-db-volume", dest="chat_db_volume", help="Specify a docker volume containing a vector store of past chat history. db containers will be loaded with the volume's contents to avoid recreation and reingestion of the history.")
-    parser.add_argument("--chat-store-collection", dest="chat_store_collection", help="If loading a database from a volume, specify the name of the collection within the database containing the chat history vector store.", default="llamaindex_chat_store")
-    args = parser.parse_args()
-
-    #validate args
-    doc_data_dir = args.data
-    if not os.path.isdir(doc_data_dir):
-        reset_demo()
-        raise argparse.ArgumentTypeError("Invalid argument for -d. Please specify a valid directory which contains the documents to ingest. Absolute paths are needed for directories outside FMSDemo/scripts/")
-
-    benchmark_dir = args.benchmark_dir
+@st.dialog("Save benchmark results")
+def write_benchmarks():
+    benchmark_dir = st.text_input("Directory to write results to", "../benchmarks/")
     if not os.path.isdir(benchmark_dir):
-        print(f"No directory found at {benchmark_dir}. Creating the directory. If this was not intended, note that absolute paths are needed to specify existing directories outside FMSDemo/scripts/")
+        print(f"{benchmark_dir} doesn't exist. Creating a new directory at that path")
         try:
             subprocess.run(["mkdir", benchmark_dir], check=True)
         except subprocess.CalledProcessError:
-            print(f"Error: mkdir failed to create a directory at {benchmark_dir}")
-            reset_demo()
-            sys.exit()
-    if benchmark_dir[-1] != "/": #benchmark_dir needs to end with a slash because later parts assume it does  
+            raise RuntimeError(f"Error: mkdir failed to create a directory at {benchmark_dir}")
+    if benchmark_dir[-1] != "/":
         benchmark_dir += "/"
 
-    doc_db_volume = args.doc_db_volume
-    doc_store_collection = args.doc_store_collection
-    chat_db_volume = args.chat_db_volume
-    chat_store_collection = args.chat_store_collection
+    if st.button("Save results"):
+        for label, df in st.session_state.benchmark_dfs.items():
+            csv_path = benchmark_dir + label.replace(" ", "_") + ".csv"
+            print(f"Writing to {csv_path}")
+            df.to_csv(csv_path)
+        st.session_state.write_benchmarks = False
+        st.rerun()
 
-    model = args.model
-    print(f"Starting {model} model in Ollama container")
-    try:
-        subprocess.run(["sudo", "docker", "exec", "-d", "ollama", "ollama", "run", model], check=True)
-    except subprocess.CalledProcessError:
-        print("Error: docker exec failed to start the model in the Ollama container") 
+def set_up_write_benchmarks():
+    st.session_state.write_benchmarks = True
+
+#run the chat interface as a fragment to prevent restarting and rerunning the script every time
+#the user updates the component by inputting a query
+@st.fragment
+def run_queries(doc_index, pipeline_memory, model, task_label): 
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    #while benchmark_dfs holds csvs for individual demo configurations (so they can be compared later),
+    #benchmark_df_rows holds the rows that will eventually be combined into one dataframe for one configuration
+    if "benchmark_df_rows" not in st.session_state:
+        st.session_state.benchmark_df_rows = []
+    
+    chat_window = st.container(border=True)
+    chat_input_container = st.container() #create containers to order elements differently than how they're declared in the script
+    #display the previous messages from the current session
+    for message in st.session_state.messages:
+        chat_window.chat_message(message["role"]).write(message["content"])
+
+    if st.button("Stop demo and show data"): #only give the user the option to input a query if the demo is running (ie they did not press the stop butotn last run)
         reset_demo()
-        sys.exit()
+        if st.session_state.benchmark_df_rows: #create a new dataframe for the data with this demo config's queries
+            benchmark_df = pd.concat(st.session_state.benchmark_df_rows, ignore_index=True)
+            #create an ingestion time column (of the right length to match the df's rows) for the query runs of this configuration
+            #ingestion only happens once, so all queries under the given demo configuration will be listed with the same time
+            ingestion_time_col = []
+            for i in range(len(benchmark_df)):
+                if st.session_state.ingestion_time:
+                    ingestion_time_col.append(st.session_state.ingestion_time)
+                else:
+                    ingestion_time_col.append(pd.NA)
+            benchmark_df.insert(loc=0, column="ingestion time", value=ingestion_time_col)
+            st.session_state.benchmark_dfs[task_label] = benchmark_df
+            st.session_state.benchmark_df_rows.clear() #after merging the data for each query into one df, clear the session state so the demo can be rerun
+        st.session_state.messages.clear() #clear message history in case demo is rerun with a new configuration
 
-    benchmark_dfs = {}
+        st.markdown("#### Pipeline data")
+        for label, df in st.session_state.benchmark_dfs.items(): #display this demo config's dataframe, and data from any other configs in this session
+            print(f"Dataframe: {label} \n {df}")
+            st.text(label)
+            st.dataframe(df, hide_index=True)
+        st.button("Save benchmark data to disk", on_click=set_up_write_benchmarks)
+        #even when this nested button is clicked, the outer if statement evaluates to false when the fragment reruns since
+        #the outer button wasn't pressed. The work around is to change the session state so the outer scope's elif can catch that the
+        #button was pressed 
+        st.markdown("#### Change any of the data and model or database settings above to rerun the demo with new settings.")
+    elif st.session_state.write_benchmarks:
+        write_benchmarks()
+    else: 
+        if query := chat_input_container.chat_input("Enter query"):
+            chat_window.chat_message("user").write(query) #display current query by user and save to session history for future reruns
+            st.session_state.messages.append({"role": "user", "content": query})
+            
+            with st.spinner("Thinking"):
+                response, benchmark_df_row = build_and_run_pipeline(query, doc_index, pipeline_memory, model)
+            chat_window.chat_message("assistant").write(response)
+            st.session_state.messages.append({"role": "assistant", "content": response})
+            print(f"Benchmark data from the pipeline run of this query: {benchmark_df_row}")
+            st.text("Data from the last query:")
+            st.dataframe(benchmark_df_row, hide_index=True) 
+            st.session_state.benchmark_df_rows.append(benchmark_df_row)
+
+if __name__ == "__main__":
+    reset_demo() #make sure no containers were left hanging before this rerun
+    st.title("LlamaIndex RAG pipeline demo :llama:")
+    check_for_ollama_container()
+
+    if "created_containers" not in st.session_state:
+        st.session_state.created_containers = [] #keep track of what docker containers are made so they can be removed as needed (either for error cleanup or to restart databases)
+    if "created_subprocesses" not in st.session_state:
+        st.session_state.created_subprocesses = [] #keep track of what subprocesses are made for similar reasons
+    if "benchmark_dfs" not in st.session_state:
+        st.session_state.benchmark_dfs = {}
+    if "write_benchmarks" not in st.session_state:
+        st.session_state.write_benchmarks = False
+
+    with st.expander("**Data and model set up**", True):
+        model = st.radio("Model", ["llama2", "mistral:7b"])
+        doc_data_dir = None
+        doc_db_volume = None
+        doc_store_collection = None
+        load_doc_db = st.toggle("Load document vector db from a docker volume instead of creating a new one")
+        if load_doc_db:
+            doc_db_volume = st.text_input("Document database volume name :red[*]")
+            doc_store_collection = st.text_input("Document vector store collection name :red[*]")
+        else:
+            doc_data_dir = st.text_input("Data directory :red[*]", "../data/")
+            if not os.path.isdir(doc_data_dir):
+                raise ValueError("Invalid data directory. Please specify an existing directory which contains the documents to ingest. Absolute paths are needed for directories outside FMSDemo/scripts/")
+
+        chat_db_volume = None
+        chat_store_collection = None
+        load_chat_db = st.toggle("Load chat history vector db from a docker volume instead of creating a new one")
+        if load_chat_db:
+            chat_db_volume = st.text_input("Chat database volume name :red[*]")
+            chat_store_collection = st.text_input("Chat vector store collection name :red[*]")
+
+        task_label = st.text_input("Task label (used to label the benchmark results) :red[*]")
+        task_label = task_label.strip()
+        if re.match(r'^(?=.*\w)[\w\s]+$', task_label) is None: #this will only match the entire string (if it's valid) or nothing
+            raise ValueError("Please enter a valid task label (at least one letter or digit, no special characters)")
+        elif task_label in st.session_state.benchmark_dfs.keys():
+            st.markdown(f":orange[Warning: the label {task_label} was used previously. The data attached to it will be overwritten]")
+
+    with st.expander("**Database setup**", True):
+        bound_cpus = st.text_input("CPU(s) to bind databases to")
+        bound_nodes = st.text_input("NUMA node(s) to bind databases to")
+        mem_config = [] #this list's memory settings will eventually be passed to docker run
+        if bound_cpus:
+            mem_config += ["--cpuset-cpus", bound_cpus]
+        if bound_nodes:
+            mem_config += ["--cpuset-mems", bound_nodes]
 
     Settings.embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-base-en-v1.5")     
-    #run through each part of the demo
-    for desc, mem_config in DEMO_DB_CONFIGS.items():
-        print(f"Running demo with {desc}")
-
-        benchmark_file_prefix = benchmark_dir + desc.replace(" ", "_") #create separate benchmark files for each demo config within the benchmark dir
-        run_dstat(f"{benchmark_file_prefix}_dstat.csv")
-
-        print("Setting up vector dbs and SimpleComposableMemory")
-        print("Setting up document vector db")
-        ingestion_time = None
-        if doc_db_volume:
-            doc_index = load_index_from_volume(mem_config, doc_db_volume, doc_store_collection, created_containers)
-        else:
-            doc_index, ingestion_time = create_new_doc_index(mem_config, doc_data_dir, doc_store_collection, created_containers)
-
-        chat_memory_buffer = ChatMemoryBuffer.from_defaults(token_limit=1000)        
-        print("Setting up past chat history vector db")
-        if chat_db_volume:
-            vector_memory = load_memory_from_volume(mem_config, chat_db_volume, chat_store_collection, created_containers) 
-        else:
-            vector_memory = create_new_chat_memory(mem_config, chat_store_collection, created_containers)
-        pipeline_memory = SimpleComposableMemory.from_defaults(
-            primary_memory=chat_memory_buffer,
-            secondary_memory_sources=[vector_memory]
+    if st.button("Launch demo"): 
+        set_up_databases(
+            doc_data_dir, doc_db_volume, doc_store_collection,
+            chat_db_volume, chat_store_collection,
+            mem_config
         )
-        
-        from query_pipeline import build_and_run_pipeline
-        benchmark_df = build_and_run_pipeline(doc_index, pipeline_memory, QUERIES, model)
-               
-        print("Resetting for next demo configuration")
-        benchmark_dfs[desc] = benchmark_df
-        pipeline_df_path = benchmark_file_prefix + "_benchmarks.csv"
-        print(f"Writing results tof {pipeline_df_path}")
-        benchmark_df.to_csv(pipeline_df_path)
 
-        reset_demo() 
+        print(f"Starting {model} model in Ollama container")
+        try:
+            subprocess.run(["sudo", "docker", "exec", "-d", "ollama", "ollama", "run", model], check=True)
+        except subprocess.CalledProcessError:
+            print("Error: docker exec failed to start the model in the Ollama container") 
+            reset_demo()
 
-    for key, value in benchmark_dfs.items():
-        print(f"{key}: {value}")
-        
-    configs_path = benchmark_dir + "demo_configs.json"
-    print(f"Writing demo configurations to {configs_path}")
-    with open (configs_path, "w") as f:
-        json.dump(DEMO_DB_CONFIGS, f)
-    print("Ending demo")
-    reset_demo()
+        run_queries(st.session_state.doc_index, st.session_state.pipeline_memory, model, task_label)

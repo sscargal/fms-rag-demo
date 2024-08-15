@@ -1,77 +1,0 @@
-a202e2fc2175bba0d3d2fdba84d22f308c7622d9ff16a1229e6a731af095881f
-docker: Error response from daemon: driver failed programming external connectivity on endpoint wiki_db (f511c4c673f7ed644e2017d34083a007d5d438daaa92be90dc2b42b15b29ab2a): Bind for 0.0.0.0:6400 failed: port is already allocated.
-Make sure an Ollama container is running
-Traceback (most recent call last):
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/httpx/_transports/default.py", line 69, in map_httpcore_exceptions
-    yield
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/httpx/_transports/default.py", line 233, in handle_request
-    resp = self._pool.handle_request(req)
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/httpcore/_sync/connection_pool.py", line 216, in handle_request
-    raise exc from None
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/httpcore/_sync/connection_pool.py", line 196, in handle_request
-    response = connection.handle_request(
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/httpcore/_sync/connection.py", line 99, in handle_request
-    raise exc
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/httpcore/_sync/connection.py", line 76, in handle_request
-    stream = self._connect(request)
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/httpcore/_sync/connection.py", line 122, in _connect
-    stream = self._network_backend.connect_tcp(**kwargs)
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/httpcore/_backends/sync.py", line 205, in connect_tcp
-    with map_exceptions(exc_map):
-  File "/usr/lib/python3.10/contextlib.py", line 153, in __exit__
-    self.gen.throw(typ, value, traceback)
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions
-    raise to_exc(exc) from exc
-httpcore.ConnectError: [Errno 111] Connection refused
-
-The above exception was the direct cause of the following exception:
-
-Traceback (most recent call last):
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/qdrant_client/http/api_client.py", line 106, in send_inner
-    response = self._client.send(request)
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/httpx/_client.py", line 914, in send
-    response = self._send_handling_auth(
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/httpx/_client.py", line 942, in _send_handling_auth
-    response = self._send_handling_redirects(
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/httpx/_client.py", line 979, in _send_handling_redirects
-    response = self._send_single_request(request)
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/httpx/_client.py", line 1015, in _send_single_request
-    response = transport.handle_request(request)
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/httpx/_transports/default.py", line 232, in handle_request
-    with map_httpcore_exceptions():
-  File "/usr/lib/python3.10/contextlib.py", line 153, in __exit__
-    self.gen.throw(typ, value, traceback)
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/httpx/_transports/default.py", line 86, in map_httpcore_exceptions
-    raise mapped_exc(message) from exc
-httpx.ConnectError: [Errno 111] Connection refused
-
-During handling of the above exception, another exception occurred:
-
-Traceback (most recent call last):
-  File "/memverge/home/jasonc/FMSDemo/scripts/./create_wiki_db_container.py", line 18, in <module>
-    vector_store = QdrantVectorStore(client=wiki_db_client, collection_name="llamaindex_wiki_store")
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/llama_index/vector_stores/qdrant/base.py", line 179, in __init__
-    self._collection_initialized = self._collection_exists(collection_name)
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/llama_index/vector_stores/qdrant/base.py", line 684, in _collection_exists
-    return self._client.collection_exists(collection_name)
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/qdrant_client/qdrant_client.py", line 1768, in collection_exists
-    return self._client.collection_exists(collection_name=collection_name, **kwargs)
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/qdrant_client/qdrant_remote.py", line 2249, in collection_exists
-    result: Optional[models.CollectionExistence] = self.http.collections_api.collection_exists(
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/qdrant_client/http/api/collections_api.py", line 1157, in collection_exists
-    return self._build_for_collection_exists(
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/qdrant_client/http/api/collections_api.py", line 87, in _build_for_collection_exists
-    return self.api_client.request(
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/qdrant_client/http/api_client.py", line 79, in request
-    return self.send(request, type_)
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/qdrant_client/http/api_client.py", line 96, in send
-    response = self.middleware(request, self.send_inner)
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/qdrant_client/http/api_client.py", line 205, in __call__
-    return call_next(request)
-  File "/memverge/home/jasonc/FMSDemo/FMSDemoVEnv/lib/python3.10/site-packages/qdrant_client/http/api_client.py", line 108, in send_inner
-    raise ResponseHandlingException(e)
-qdrant_client.http.exceptions.ResponseHandlingException: [Errno 111] Connection refused
-f03417e9a014ddb9f795f0d9236e32100b0bc77a48325dc25cffa9b857bc324b
-Make sure an Ollama container is running
-Starting ingestion
-Parsing nodes:   0%|          | 0/18 [00:00<?, ?it/s]Parsing nodes:   6%|▌         | 1/18 [3:37:59<61:45:49, 13079.36s/it]Parsing nodes:  11%|█         | 2/18 [6:53:50<54:39:33, 12298.31s/it]Parsing nodes:  17%|█▋        | 3/18 [10:03:28<49:29:24, 11877.66s/it]Parsing nodes:  22%|██▏       | 4/18 [13:03:49<44:34:12, 11460.87s/it]Parsing nodes:  28%|██▊       | 5/18 [15:51:58<39:35:56, 10965.89s/it]Parsing nodes:  33%|███▎      | 6/18 [18:27:53<34:43:37, 10418.14s/it]Parsing nodes:  39%|███▉      | 7/18 [20:51:06<30:00:38, 9821.66s/it] Parsing nodes:  44%|████▍     | 8/18 [23:02:02<25:32:39, 9195.98s/it]Parsing nodes:  50%|█████     | 9/18 [25:10:56<21:50:48, 8738.68s/it]Parsing nodes:  56%|█████▌    | 10/18 [27:27:33<19:02:53, 8571.71s/it]Parsing nodes:  61%|██████    | 11/18 [29:58:53<16:58:10, 8727.18s/it]Parsing nodes:  67%|██████▋   | 12/18 [32:12:43<14:11:29, 8514.95s/it]Parsing nodes:  72%|███████▏  | 13/18 [34:28:11<11:39:48, 8397.77s/it]Parsing nodes:  78%|███████▊  | 14/18 [36:36:11<9:05:24, 8181.00s/it] Parsing nodes:  83%|████████▎ | 15/18 [39:02:02<6:57:38, 8352.90s/it]Parsing nodes:  89%|████████▉ | 16/18 [41:03:37<4:27:49, 8034.51s/it]Parsing nodes:  94%|█████████▍| 17/18 [43:22:47<2:15:29, 8129.33s/it]Parsing nodes: 100%|██████████| 18/18 [44:10:10<00:00, 6540.91s/it]  Parsing nodes: 100%|██████████| 18/18 [44:10:10<00:00, 8833.94s/it]
