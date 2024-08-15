@@ -13,7 +13,7 @@ Install dependencies by `cd`ing into the FMSDemo/ directory and running `pip ins
 
 With the virtual environment activated, `cd` into the scripts/ directory and run `streamlit run fmsdemo.py`
 
-The web UI will guide you through the demo. Streamlit will print how to access it to the terminal. If you'd like to only have to ingest your data once while using it multiple times, create a Qdrant container with the argument `-v volume_name:/qdrant`. Then, ingest the data into the container. The container's state will be saved into volume_name, so simply pass that (and the name of the collection created within the container) into the appropriate fields of the UI. More details on this is in the **Examples** section.
+The web UI will guide you through the demo. Streamlit will print how to access it to the terminal. If you'd like to only have to ingest your data once while using it multiple times, create a Qdrant container with the argument `-v volume_name:/qdrant`. Then, ingest the data into the container. The container's state will be saved into volume_name, so simply pass that (and the name of the collection created within the container) into the appropriate fields of the UI. More details on this are in the **Examples** section.
 
 #### A few notes:
 
@@ -98,5 +98,3 @@ Say I have a machine with two NUMA nodes, 0 being DRAM and 1 being CXL and that 
 5. Press `Stop demo and show data`. Then, change the `NUMA node(s) to bind databases to` field to 1 and the task label to "cxl only"
 6. Press `Launch demo` and enter your queries
 7. Press `Stop demo and show data`. Optionally, save the results to disk
-
-# TODO: code cleanup. also note what top_k args affect what in the two files. for pipeline memory, top_k will determine how many chat messages are retrieved because thehy are the retrieer. doc eventual top_k is reranker param
