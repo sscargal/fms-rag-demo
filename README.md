@@ -13,7 +13,7 @@ Install dependencies by `cd`ing into the FMSDemo/ directory and running `pip ins
 
 With the virtual environment activated, `cd` into the scripts/ directory and run `streamlit run fmsdemo.py`
 
-The web UI will guide you through the demo. Streamlit will print how to access it to the terminal. If you'd like to only have to ingest your data once while using it multiple times, create a Qdrant container with the argument `-v volume_name:/qdrant`. Then, ingest the data into the container. The container's state will be saved into volume_name, so simply pass that (and the name of the collection created within the container) into the appropriate fields of the UI. More details on this is in the **Examples** section.
+The web UI will guide you through the demo. Streamlit will print how to access it to the terminal. If you'd like to only have to ingest your data once while using it multiple times, create a Qdrant container with the argument `-v volume_name:/qdrant`. Then, ingest the data into the container. The container's state will be saved into volume_name, so simply pass that (and the name of the collection created within the container) into the appropriate fields of the UI. More details on this are in the **Examples** section.
 
 #### A few notes:
 
@@ -34,8 +34,6 @@ The pipeline features some prompt chaining and pulls context from three sources:
 The goal is for this to simulate a RAG pipeline that goes beyond enhancing inference with document context. Imagine a cumulative database containing every past message sent by a user (or every user) from every past session. Not only can the model see past messages from its current session, it can also pull from this past message database to answer questions. So, a user could successfully ask something like "Can you summarize the results of our company's quarterly report?" (document context); "You mentioned x earlier. Can you explain that again differently?" (primary memory context); or "I remember you told me y about x yesterday. Could you elaborate more on that?" (secondary memory context).
 
 Documents are queried through an index connected to one Qdrant docker container. The past chat history vector store is connected to another Qdrant container. The current chat history is managed by LlamaIndex. Ollama runs in its own container. When the demo runs, context is retrieved from the corresponding containers and combined into one final prompt which is then passed to the model running inside the Ollama container.
-
-Benchmark data for various parts of the pipeline is written to the directory specified by -b.
 
 ![Image](./FMSDemo_structure.png)
 
@@ -98,5 +96,3 @@ Say I have a machine with two NUMA nodes, 0 being DRAM and 1 being CXL and that 
 5. Press `Stop demo and show data`. Then, change the `NUMA node(s) to bind databases to` field to 1 and the task label to "cxl only"
 6. Press `Launch demo` and enter your queries
 7. Press `Stop demo and show data`. Optionally, save the results to disk
-
-# TODO: code cleanup. also note what top_k args affect what in the two files. for pipeline memory, top_k will determine how many chat messages are retrieved because thehy are the retrieer. doc eventual top_k is reranker param
