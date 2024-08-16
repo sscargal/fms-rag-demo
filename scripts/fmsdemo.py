@@ -94,6 +94,9 @@ def reset_demo():
     if "messages" in st.session_state:
         print("Clearing session state message history")
         st.session_state.messages.clear()
+        
+    if "write_benchmarks" in st.session_state:
+        st.session_state.write_benchmarks = False
    
 def check_for_ollama_container():
     try:
