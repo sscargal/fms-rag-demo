@@ -35,8 +35,6 @@ The goal is for this to simulate a RAG pipeline that goes beyond enhancing infer
 
 Documents are queried through an index connected to one Qdrant docker container. The past chat history vector store is connected to another Qdrant container. The current chat history is managed by LlamaIndex. Ollama runs in its own container. When the demo runs, context is retrieved from the corresponding containers and combined into one final prompt which is then passed to the model running inside the Ollama container.
 
-Benchmark data for various parts of the pipeline is written to the directory specified by -b.
-
 ![Image](./FMSDemo_structure.png)
 
 ## Examples
