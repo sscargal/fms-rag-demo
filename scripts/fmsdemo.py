@@ -61,9 +61,9 @@ CHAT_DB_PORT = 7001
 #with an unexpected error
 def run_dstat(output_file):
     #start dstat in the background to measure disk and cpu util at different points in the demo
-    print(f"Starting a background dstat process and writing results to {output_file}")
+    logger.info(f"Starting a background dstat process and writing results to {output_file}")
     if os.path.exists(output_file):
-        print(f"Warning: {output_file} already exists. dstat output will be concatenated to the end of this file")
+        logger.warning(f"Warning: {output_file} already exists. dstat output will be concatenated to the end of this file")
     process = subprocess.Popen(
         ["dstat", "--cpu", "--disk", "--page", "--mem", "--time", "--epoch", "--output", output_file, "1"],
         stdout=subprocess.DEVNULL,
@@ -82,7 +82,7 @@ def run_pcm_memory(output_file):
 
 def reset_demo():
     if "created_containers" in st.session_state:
-        print("Clearing vector db containers")
+        logger.info("Clearing vector db containers")
         for container in st.session_state.created_containers:
             subprocess.run(["sudo", "docker", "stop", container])
             time.sleep(3)
@@ -90,13 +90,13 @@ def reset_demo():
         st.session_state.created_containers.clear()
 
     if "created_subprocesses" in st.session_state:
-        print("Removing any created background processes")
+        logger.info("Removing any created background processes")
         for process in st.session_state.created_subprocesses:
-            print(f"Terminating {process}")
+            logger.info(f"Terminating {process}")
             process.send_signal(signal.SIGINT) #send SIGINT specifically to let commands write their outputs to files
             
     if "messages" in st.session_state:
-        print("Clearing session state message history")
+        logger.info("Clearing session state message history")
         st.session_state.messages.clear()
         
     if "write_benchmarks" in st.session_state:
@@ -117,7 +117,7 @@ def check_for_ollama_container():
         return "Error: docker ps failed" 
 
 def start_vector_db(docker_command):
-    print(f"Running the following command: {docker_command}")
+    logger.info(f"Running the following command: {docker_command}")
     st.text("Creating database container")
     command_result = None
     try:
@@ -125,7 +125,7 @@ def start_vector_db(docker_command):
     except subprocess.CalledProcessError:
         logger.error(f"Error trying to run {docker_command}. Are the host port and container name available?")
     container_id = command_result.stdout.strip()
-    print(f"Created container id: {container_id}")
+    logger.info(f"Created container id: {container_id}")
     st.session_state.created_containers.append(container_id)    
     #extract the host port bound to container port 6333
     command_result = subprocess.run(["sudo", "docker", "inspect",
@@ -141,7 +141,7 @@ def start_vector_db(docker_command):
         st.text("Connecting to the database")
         
         client = QdrantClient(host="localhost", port=port)
-        print(f"Host port connected to container: {port}")
+        logger.info(f"Host port connected to container: {port}")
         for i in range(0, MAX_ATTEMPTS):
             st.text(f"Attempt {i+1}")
             try:
@@ -214,7 +214,7 @@ def create_new_doc_index(mem_config, doc_data_dir):
         documents = SimpleDirectoryReader(doc_data_dir).load_data()
 
     start_time = time.perf_counter()
-    print(f"Ingestion starting time: {start_time}")
+    logger.info(f"Ingestion starting time: {start_time}")
     with st.spinner("Ingesting documents into database and creating index"):
         doc_index = VectorStoreIndex.from_documents(
             documents,
@@ -223,7 +223,7 @@ def create_new_doc_index(mem_config, doc_data_dir):
         )
 
     end_time = time.perf_counter()
-    print(f"Ingestion ending time: {end_time}")
+    logger.info(f"Ingestion ending time: {end_time}")
     ingestion_time = end_time - start_time
     st.success(f"Ingestion complete! Total ingestion time: {ingestion_time:.6f} seconds")
     return doc_index, ingestion_time
@@ -256,15 +256,16 @@ def set_up_databases(doc_data_dir, doc_db_volume, doc_store_collection,
         primary_memory=chat_memory_buffer,
         secondary_memory_sources=[past_chat_memory]
     )
-    print("Doc index and composable memory object saved to session state")
+    logger.info("Doc index and composable memory object saved to session state")
 
 @st.dialog("Save benchmark results")
 def write_benchmarks():
     benchmark_dir = st.text_input("Directory to write results to", "../benchmarks/")
     if not os.path.isdir(benchmark_dir):
-        print(f"{benchmark_dir} doesn't exist. Creating a new directory at that path")
+        logger.info(f"{benchmark_dir} doesn't exist. Creating a new directory at that path")
         try:
             subprocess.run(["mkdir", benchmark_dir], check=True)
+
         except subprocess.CalledProcessError:
             logger.error(f"Error: mkdir failed to create a directory at {benchmark_dir}")
     if benchmark_dir[-1] != "/":
@@ -273,7 +274,7 @@ def write_benchmarks():
     if st.button("Save results"):
         for label, df in st.session_state.benchmark_dfs.items():
             csv_path = benchmark_dir + label.replace(" ", "_") + ".csv"
-            print(f"Writing to {csv_path}")
+            logger.info(f"Writing to {csv_path}")
             df.to_csv(csv_path)
         st.session_state.write_benchmarks = False
         st.rerun()
@@ -317,7 +318,7 @@ def run_queries(doc_index, pipeline_memory, model, task_label):
 
         st.markdown("#### Pipeline data")
         for label, df in st.session_state.benchmark_dfs.items(): #display this demo config's dataframe, and data from any other configs in this session
-            print(f"Dataframe: {label} \n {df}")
+            logger.info(f"Dataframe: {label} \n {df}")
             st.text(label)
             st.dataframe(df, hide_index=True)
         st.button("Save benchmark data to disk", on_click=set_up_write_benchmarks)
@@ -336,7 +337,7 @@ def run_queries(doc_index, pipeline_memory, model, task_label):
                 response, benchmark_df_row = build_and_run_pipeline(query, doc_index, pipeline_memory, model)
             chat_window.chat_message("assistant").write(response)
             st.session_state.messages.append({"role": "assistant", "content": response})
-            print(f"Benchmark data from the pipeline run of this query: {benchmark_df_row}")
+            logger.info(f"Benchmark data from the pipeline run of this query: {benchmark_df_row}")
             st.text("Data from the last query:")
             st.dataframe(benchmark_df_row, hide_index=True) 
             st.session_state.benchmark_df_rows.append(benchmark_df_row)
@@ -400,11 +401,11 @@ if __name__ == "__main__":
             mem_config
         )
 
-        print(f"Starting {model} model in Ollama container")
+        logger.info(f"Starting {model} model in Ollama container")
         try:
             subprocess.run(["sudo", "docker", "exec", "-d", "ollama", "ollama", "run", model], check=True)
         except subprocess.CalledProcessError:
-            print("Error: docker exec failed to start the model in the Ollama container") 
+            logger.error("Error: docker exec failed to start the model in the Ollama container") 
             reset_demo()
 
         run_queries(st.session_state.doc_index, st.session_state.pipeline_memory, model, task_label)
