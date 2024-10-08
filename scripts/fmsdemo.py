@@ -20,6 +20,10 @@ import signal
 import os
 import re
 import time
+import logging
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
     
 #this list contains "past" messages related to the documents in the demo that we want to be retrieved
 RELEVANT_DEMO_HISTORY = [ChatMessage.from_str("Could you summarize the purpose of the article for me?", "user"),
@@ -108,7 +112,7 @@ def check_for_ollama_container():
         )
 
         if not result.stdout:
-            raise RuntimeError("An Ollama container must already be running! Please start a docker container with your desired settings and refresh the page")
+            logger.error("An Ollama container must already be running! Please start a docker container with your desired settings and refresh the page")
     except subprocess.CalledProcessError: 
         return "Error: docker ps failed" 
 
@@ -119,7 +123,7 @@ def start_vector_db(docker_command):
     try:
         command_result = subprocess.run(docker_command, capture_output=True, text=True, check=True)
     except subprocess.CalledProcessError:
-        raise RuntimeError(f"Error trying to run {docker_command}. Are the host port and container name available?")
+        logger.error(f"Error trying to run {docker_command}. Are the host port and container name available?")
     container_id = command_result.stdout.strip()
     print(f"Created container id: {container_id}")
     st.session_state.created_containers.append(container_id)    
@@ -148,13 +152,13 @@ def start_vector_db(docker_command):
                 st.text(f"Connection failed. Retrying in {ATTEMPT_DELAY} seconds")
             time.sleep(ATTEMPT_DELAY)
         
-        raise RuntimeError("Couldn't connect to the created database")
+        logger.error("Couldn't connect to the created database")
     
 def validate_collection(client, collection):
     collections = client.get_collections()
     if collection not in [collection.name for collection in collections.collections]:
         reset_demo()
-        raise RuntimeError(f"The collection {collection} wasn't found in the database!")
+        logger.info(f"The collection {collection} wasn't found in the database!")
 
 #the similarity_top_k args passed in both chat memory creation functions will determine the final
 #amount of messages retrieved from the db by the pipeline (ie there is no reranking to a smaller number)
@@ -262,7 +266,7 @@ def write_benchmarks():
         try:
             subprocess.run(["mkdir", benchmark_dir], check=True)
         except subprocess.CalledProcessError:
-            raise RuntimeError(f"Error: mkdir failed to create a directory at {benchmark_dir}")
+            logger.error(f"Error: mkdir failed to create a directory at {benchmark_dir}")
     if benchmark_dir[-1] != "/":
         benchmark_dir += "/"
 
@@ -363,7 +367,7 @@ if __name__ == "__main__":
         else:
             doc_data_dir = st.text_input("Data directory :red[*]", "../data/")
             if not os.path.isdir(doc_data_dir):
-                raise ValueError("Invalid data directory. Please specify an existing directory which contains the documents to ingest. Absolute paths are needed for directories outside FMSDemo/scripts/")
+                logger.error("Invalid data directory. Please specify an existing directory which contains the documents to ingest. Absolute paths are needed for directories outside FMSDemo/scripts/")
 
         chat_db_volume = None
         chat_store_collection = None
@@ -372,10 +376,10 @@ if __name__ == "__main__":
             chat_db_volume = st.text_input("Chat database volume name :red[*]")
             chat_store_collection = st.text_input("Chat vector store collection name :red[*]")
 
-        task_label = st.text_input("Task label (used to label the benchmark results) :red[*]")
+        task_label = st.text_input("Task label (used to label the benchmark results) :red[*]", value="Default")
         task_label = task_label.strip()
-        if re.match(r'^(?=.*\w)[\w\s]+$', task_label) is None: #this will only match the entire string (if it's valid) or nothing
-            raise ValueError("Please enter a valid task label (at least one letter or digit, no special characters)")
+        if not task_label or not re.search(r'[a-zA-Z0-9]', task_label) is None: #this will only match the entire string (if it's valid) or nothing
+            st.warning("Please enter a valid task label (at least one letter or digit, no special characters)")
         elif task_label in st.session_state.benchmark_dfs.keys():
             st.markdown(f":orange[Warning: the label {task_label} was used previously. The data attached to it will be overwritten]")
 
