@@ -377,9 +377,9 @@ if __name__ == "__main__":
             chat_db_volume = st.text_input("Chat database volume name :red[*]")
             chat_store_collection = st.text_input("Chat vector store collection name :red[*]")
 
-        task_label = st.text_input("Task label (used to label the benchmark results) :red[*]", value="Default")
+        task_label = st.text_input("Task label (used to label the benchmark results) :red[*]", value="default")
         task_label = task_label.strip()
-        if not task_label or not re.search(r'[a-zA-Z0-9]', task_label) is None: #this will only match the entire string (if it's valid) or nothing
+        if not task_label or not re.search(r'[a-zA-Z0-9]', task_label):
             st.warning("Please enter a valid task label (at least one letter or digit, no special characters)")
         elif task_label in st.session_state.benchmark_dfs.keys():
             st.markdown(f":orange[Warning: the label {task_label} was used previously. The data attached to it will be overwritten]")
