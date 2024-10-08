@@ -1,21 +1,60 @@
+# Retrieval Augmented Generation (RAG) Using Compute Express Link (CXL) Memory
+
+This is a demonstration project for a RAG (Retrieval-Augmented Generation) pipeline that combines document context, current session chat history, and cumulative chat history to enhance LLM responses.
+
+## Prerequisites: 
+
+This repository requires the following:
+
+- Docker
+- python3
+- pip
+- Ubuntu 22.04 (minimum), 24.04 running Kernel 6.9 or newer is required for Kernel Weighted Interleaving.
+
 ## Installation
 
-*Optional: If you're planning to use Kernel TPP, install Ubuntu 24.04 and Kernel 6.9*
+1. Install the Python dependencies
 
-Prerequisites: python3 and pip
+```bash
+sudo apt-get install -y build-essential zlib1g-dev libncurses5-dev libgdbm-dev libnss3-dev libssl-dev libsqlite3-dev libreadline-dev libffi-dev wget libbz2-dev
+```
 
-Create a new virtual environment using `python3 -m venv`.
-Activate the VE using `source`
-If not already installed, install docker as shown [here.](https://docs.docker.com/engine/install/ubuntu/)
-Install dependencies by `cd`ing into the FMSDemo/ directory and running `pip install -r requirements.txt`
+2. Create and activate a virtual environment called `llmdemo`:
 
-## Running the Demo
+```bash
+python3 -m venv llmdemo
+source llmdemo/bin/activate
+```
 
-With the virtual environment activated, `cd` into the scripts/ directory and run `streamlit run fmsdemo.py`
+3. Install Docker following the [official documentation](https://docs.docker.com/engine/install/ubuntu/).
 
-The web UI will guide you through the demo. Streamlit will print how to access it to the terminal. If you'd like to only have to ingest your data once while using it multiple times, create a Qdrant container with the argument `-v volume_name:/qdrant`. Then, ingest the data into the container. The container's state will be saved into volume_name, so simply pass that (and the name of the collection created within the container) into the appropriate fields of the UI. More details on this are in the **Examples** section.
+4. Install the project dependencies
 
-#### A few notes:
+```bash
+pip install -r requirements.txt
+```
+
+## Quick Start
+
+1. Activate the virtual environment:
+
+```bash
+source myenv/bin/activate
+```
+
+2. Start the we UI:
+
+```bash
+cd scripts/
+streamlit run fmsdemo.py
+```
+
+Note: It make take a minute or more to initialize and fully start the UI before it becomes available for use.
+
+3. Refer to the **Examples** section for step-by-step instructions to use the UI to run various demos. 
+    - Streamlit will print how to access it to the terminal. If you'd like to only have to ingest your data once while using it multiple times, create a Qdrant container with the argument `-v volume_name:/qdrant`. Then, ingest the data into the container. The container's state will be saved into volume_name, so simply pass that (and the name of the collection created within the container) into the appropriate fields of the UI.
+
+**Notes**
 
 - When specifying CPU and NUMA nodes, use single numbers, hyphens for ranges, or commas for multiple (eg 0 or 7-10 or 3,5)
 - Note that LlamaIndex will attempt to ingest *everything* located in the directory specified in the Data directory field. The data directory specified must exist and should only contain textual data (but text can be in a variety of file types, eg .txt and .pdf)
@@ -41,58 +80,92 @@ Documents are queried through an index connected to one Qdrant docker container.
 
 All these examples assume the virtual environment has already been activated.
 
-#### Provided sample demo configuration
+### 1. Using the Provided Sample Data (Wikipedia)
 
 The demo repository comes with some sample data and chat messages to use. To use it, do the following in the UI:
 
-1. `cd` into FMSDemo/scripts, run `streamlit run fmsdemo.py`, and open the UI
-2. Type in any random task label (eg "demo example")
-3. Press the `Launch demo` button
-- That's it! You can now input queries into the pipeline. The documents that were ingested by the script are a few Wikipedia articles and a paper on the origins of COVID (you can read the original documents yourself within the FMSDemo/data directory)
+1. Navigate to the `scripts` directory
+2. Run `streamlit run fmsdemo.py`, and open the UI in a web browser
+3. Enter the task label name (eg "demo")
+4. Press the `Launch demo` button
+- That's it! You can now input queries into the pipeline. The documents that were ingested by the script are a few Wikipedia articles and a paper on the origins of COVID (you can read the original documents yourself within the `data` directory)
 - The terminal contains additional program information. Notably, it contains more verbose output from the RAG pipeline
 - When you're done, press the `Stop demo and show data` button. Optionally, you can then press `Save benchmark data to disk` to write measurements about the pipeline to a file
 
-#### Preloading data into a database to avoid reingestion
+### 2. Preloading Data to Avoid Reingestion
 
-This example goes over how to ingest a document dataset once using LlamaIndex to reingestion. The sample LlamaIndex program and process as a whole can easily be reused to fit your own use case with minimal modificaitons
-1. `cd` into FMSDemo/examples/preload/
-    - The articles we want to ingest are located in the wiki/ directory
-2. Run `chmod +x llamaindex_ingest.py`
-3. Run the following to create the vector database container the data will be ingested into: `sudo docker run -d --name wiki_db -p 7000:6333 -v wiki_db_vol:/qdrant qdrant/qdrant`
-4. Run `./llamaindex_ingest.py`
-    - Take a look at the llamaindex_ingest.py file to see how it works if you haven't used LlamaIndex before
-        - Note that we are specifying that the database container is connected to host port 7000, that the data is in wiki/, and that we want the name of the vector store collection that ends up being created to be "llamaindex_wiki_store"
+This example demonstrates how to ingest a document dataset once using LlamaIndex. The sample LlamaIndex program and process as a whole can easily be reused to fit your own use case with minimal modificaitons:
+
+1. Navigate to `examples/preload/` and run the `llamaindex_ingest.py` script
+```bash
+cd examples/preload
+chmod +x llamaindex_ingest.py
+sudo docker run -d --name wiki_db -p 7000:6333 -v wiki_db_vol:/qdrant qdrant/qdrant
+./llamaindex_ingest.py
+sudo docker stop wiki_db
+```
+    - The articles to be ingested are located in the `wiki/` directory
     - LlamaIndex will now create the vector database from the documents passed into it. Because this database is in a Docker container mounted to the wiki_db_vol volume, all the data will be stored in the volume for future use
-5. Run `sudo docker stop wiki_db`. The container has to be stopped to prevent issues when the script runs another container mounted to the same volume
-6. `cd` into FMSDemo/scripts, run `streamlit run fmsdemo.py`, and open the UI
-7. Type in any random task label (eg "preload example")
-8. Toggle the `Load document vector db from a docker volume` option. Enter "wiki_db_vol" in the `volume name` field and "llamaindex_wiki_store" in the `collection name` field
-9. Press `Launch demo`. Whenever you want, you can stop the demo, refresh the browser, or change the settings and relaunch the demo with the same document loading options. Instead of having to reingest the articles between each of these restarts, the demo will load the preloaded database, saving a lot of time
 
-#### Using the provided larger chat history
+2. Start the UI:
+```bash
+cd ../../scripts
+streamlit run fmsdemo.py
+```
 
-This example shows how to use a provided dataset and script to create a vector store that simulates having a larger chat history than what is created when the second database is spun up from scratch. Similarly to with the document database, it also shows how you can load the chat history database from preexisting data to save time
-1. `cd` into FMSDemo/examples/chat_history/
-2. Run `chmod +x create_chat_db_container.py`
-3. Run the following to create the vector database container the data will be ingested into: `sudo docker run -d --name chat_db -p 7000:6333 -v chat_db_vol:/qdrant qdrant/qdrant`
-4. Run `./create_chat_db_container.py`
-    - This file takes a csv of the SQuAD dataset, converts everything into chat messages, and inserts them into the vector database using LlamaIndex
-        - Note that we are specifying that the database container is connected to host port 7000 and that we want the name of the vector store collection that ends up being created to be "llamaindex_chat_store"
-    - LlamaIndex will now create the vector store from the messages passed into it. Because this store is in a Docker container mounted to the chat_db_vol volume, all the data will be stored in the volume for future use
-5. Run `sudo docker stop chat_db`. The container has to be stopped to prevent issues when the script runs another container mounted to the same volume
-6. `cd` into FMSDemo/scripts, run `streamlit run fmsdemo.py`, and open the UI
-7. Type in any random task label (eg "chat history example")
-8. Toggle the `Load chat history vector db from a docker volume` option. Enter "chat_db_vol" in the `volume name` field and "llamaindex_chat_store" in the `collection name` field
-9. Press `Launch demo`. Whenever you want, you can stop the demo, refresh the browser, or change the settings and relaunch the demo with the same chat history loading options. Instead of having to recreate a chat history for each of these restarts, the demo will load the preloaded database, saving a lot of time
-- Note that, when using the option to load the chat history database from a volume, any new queries sent to the pipeline and the pipeline's response will be persisted into the volume. This is because they are put into the vector memory which is connected to the container which is connected to the volume. That means that, as long as the same volume and collection are loaded, messages from past sessions will carry over and be loaded
+3. Type in any random task label (eg "preload example")
+4. Toggle the `Load document vector db from a docker volume` option. Enter "wiki_db_vol" in the `volume name` field and "llamaindex_wiki_store" in the `collection name` field
+5. Press `Launch demo`. Whenever you want, you can stop the demo, refresh the browser, or change the settings and relaunch the demo with the same document loading options. Instead of having to reingest the articles between each of these restarts, the demo will load the preloaded database, saving a lot of time
 
-#### Using the memory configuration options
+### 3. Using the provided larger chat history
 
-Say I have a machine with two NUMA nodes, 0 being DRAM and 1 being CXL and that I want to run the demo using DRAM only then CXL only, both times on CPUs 32-40, and compare the results.
-1. Set up the document and chat databases as you want (both from scratch, both preloaded, or one from scratch and one preloaded)
-2. Enter "dram only" as the task label
+This example shows how to use a provided dataset and script to create a vector store that simulates having a larger chat history than what is created when the second database is spun up from scratch. Similarly to with the document database, it also shows how you can load the chat history database from preexisting data to save time.
+
+1. Navigate to `examples/chat_history/`.
+2. Create and populate the chat history database:
+```bash
+chmod +x create_chat_db_container.py
+sudo docker run -d --name chat_db -p 7000:6333 -v chat_db_vol:/qdrant qdrant/qdrant
+./create_chat_db_container.py
+sudo docker stop chat_db
+```
+3. Type in any random task label (eg "preload example")
+4. Toggle the `Load document vector db from a docker volume` option. Enter "wiki_db_vol" in the `volume name` field and "llamaindex_wiki_store" in the `collection name` field
+5. Press `Launch demo`. Whenever you want, you can stop the demo, refresh the browser, or change the settings and relaunch the demo with the same document loading options. Instead of having to reingest the articles between each of these restarts, the demo will load the preloaded database, saving a lot of time
+  - Note that, when using the option to load the chat history database from a volume, any new queries sent to the pipeline and the pipeline's response will be persisted into the volume. This is because they are put into the vector memory which is connected to the container which is connected to the volume. That means that, as long as the same volume and collection are loaded, messages from past sessions will carry over and be loaded
+
+### 4. Using the memory configuration options
+
+To compare DRAM and CXL performance, the process is:
+- Set up databases as desired (see above)
+- Run the demo with CPUs X-Y on NUMA node 0 (DRAM).
+- Stop the demo and change settings to NUMA node 2 (CXL).
+- Run the demo again and compare results.
+
+1. Set up the document and chat databases as you want (both from scratch, both preloaded, or one from scratch and one preloaded). See previous examples.
+2. In the UI, Enter "dram only" as the task label
 3. Enter 32-40 in the `CPU(s) to bind databases to` field and 0 in the `NUMA node(s) to bind databases to` field
 4. Press `Launch demo` and enter some queries
-5. Press `Stop demo and show data`. Then, change the `NUMA node(s) to bind databases to` field to 1 and the task label to "cxl only"
+5. Press `Stop demo and show data`. Then, change the `NUMA node(s) to bind databases to` field to 2 and the task label to "cxl only"
 6. Press `Launch demo` and enter your queries
 7. Press `Stop demo and show data`. Optionally, save the results to disk
+
+## Troubleshooting
+
+If you encounter errors when installing Python or starting the demo UI with `streamlit run fmsdemo.py`, reinstall Python inside your virtual environment. For example, to reinstall Python 3.11.9:
+
+```bash
+pyenv uninstall 3.11.9
+pyenv install 3.11.9
+```
+
+This should compile Python with all the necessary modules. If you still encounter issues, you may need to install additional dependencies. Use the errors to identify which dependencies are required, then use `apt` to install them.
+
+After installing these dependencies, reinstall Python:
+
+```bash
+pyenv uninstall 3.11.9
+pyenv install 3.11.9
+```
+
+There should be no new errors.
