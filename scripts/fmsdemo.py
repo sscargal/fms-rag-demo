@@ -11,6 +11,8 @@ from llama_index.core.llms import ChatMessage
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client import models
+from qdrant_client.http import models
+from qdrant_client.http.exceptions import UnexpectedResponse
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from query_pipeline import build_and_run_pipeline
 import pandas as pd 
@@ -19,8 +21,20 @@ import subprocess
 import signal
 import os
 import re
+import socket
+import docker
 import time
 import logging
+import sys
+import atexit
+import httpx
+import time
+import json
+
+
+DOC_DB_PORT = 7000
+CHAT_DB_PORT = 7001
+OLLAMA_API_URL = "http://localhost:11434"
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -53,8 +67,6 @@ RELEVANT_DEMO_HISTORY = [ChatMessage.from_str("Could you summarize the purpose o
                                             "In recent years, the state has experienced significant growth in its steel industry, with Outokumpu, Nucor, SSAB, ThyssenKrupp, and U.S. Steel operating facilities in the state and employing over 10,000 people. The Hunt Refining Company, a subsidiary of Hunt Consolidated, Inc., operates a refinery in Tuscaloosa, while JVC America, Inc. operates an optical disc replication and packaging plant in the same city."
                                             "The state has also seen an increase in tourism and entertainment, with attractions such as the Airbus A320 family aircraft assembly plant in Mobile, which was formally announced by Airbus CEO Fabrice Brégier in 2012 and began operating in 2015. The plant produces up to 50 aircraft per year by 2017."
                                             "Overall, Alabama's economy has diversified over the years, with a mix of traditional and new industries driving growth and development in the state."), "assistant")]
-DOC_DB_PORT = 7000
-CHAT_DB_PORT = 7001
 
 #note that dstat and pcm memory are currently not run during the demo. Call these functions
 #to add that functionality, but beware that they can easily leak if the script gets interrupted
@@ -81,9 +93,11 @@ def run_pcm_memory(output_file):
         st.session_state.created_subprocesses.append(process)
 
 def reset_demo():
+    #st.text("Resetting demo...")
     if "created_containers" in st.session_state:
         logger.info("Clearing vector db containers")
         for container in st.session_state.created_containers:
+            st.text("Stopping and removing Docker containers...")
             subprocess.run(["sudo", "docker", "stop", container])
             time.sleep(3)
             subprocess.run(["sudo", "docker", "remove", container])
@@ -101,58 +115,255 @@ def reset_demo():
         
     if "write_benchmarks" in st.session_state:
         st.session_state.write_benchmarks = False
-   
-def check_for_ollama_container():
-    try:
-        result = subprocess.run(
-            ["sudo", "docker", "ps", "--filter", "ancestor=ollama/ollama"],
-            capture_output=True,
-            text=True,
-            check=True
-        )
 
-        if not result.stdout:
-            logger.error("An Ollama container must already be running! Please start a docker container with your desired settings and refresh the page")
-    except subprocess.CalledProcessError: 
-        return "Error: docker ps failed" 
+def create_network_if_not_exists(network_name="ollama"):
+    client = docker.from_env()
+    
+    # Check if the network already exists
+    existing_networks = client.networks.list(names=[network_name])
+    if not existing_networks:
+        logger.info(f"Network '{network_name}' does not exist. Creating it.")
+        st.text(f"Creating Docker network '{network_name}'...")
+        client.networks.create(network_name)
+        logger.info(f"Network '{network_name}' created successfully.")
+        st.text(f"Network '{network_name}' created successfully.")
+    else:
+        logger.info(f"Network '{network_name}' already exists.")
+        st.text(f"Network '{network_name}' already exists.")
 
-def start_vector_db(docker_command):
-    logger.info(f"Running the following command: {docker_command}")
-    st.text("Creating database container")
-    command_result = None
+# Function to check and download multiple models using the correct API endpoint
+def check_and_download_models(models):
+    """Check if models are available in Ollama, and download them if not."""
     try:
-        command_result = subprocess.run(docker_command, capture_output=True, text=True, check=True)
-    except subprocess.CalledProcessError:
-        logger.error(f"Error trying to run {docker_command}. Are the host port and container name available?")
-    container_id = command_result.stdout.strip()
-    logger.info(f"Created container id: {container_id}")
-    st.session_state.created_containers.append(container_id)    
-    #extract the host port bound to container port 6333
-    command_result = subprocess.run(["sudo", "docker", "inspect",
-                                     "--format={{(index (index .NetworkSettings.Ports \"6333/tcp\") 0).HostPort}}",
-                                     container_id], capture_output=True, text=True)
-    port = command_result.stdout.strip()
-    #couldn't find a good command to use for a docker healthcheck, so check for when the database is ready by testing the client connection
-    with st.spinner("Starting vector database"):
-        st.text("Letting the database warm up")
-        time.sleep(5)
-        MAX_ATTEMPTS = 5
-        ATTEMPT_DELAY = 10
-        st.text("Connecting to the database")
+        # Use the correct API endpoint to list models
+        response = httpx.get(f"{OLLAMA_API_URL}/api/tags")
+        response.raise_for_status()
+
+        # Extract available models from the API response
+        available_models = [model["name"] for model in response.json().get("models", [])]
+
+        for model in models:
+            if model in available_models:
+                st.text(f"Model '{model}' is already downloaded.")
+                logger.info(f"Model '{model}' is already downloaded.")
+            else:
+                st.text(f"Model '{model}' not found. Downloading now...")
+                logger.info(f"Model '{model}' not found. Downloading now...")
+                download_model(model)
+
+    except httpx.HTTPStatusError as e:
+        st.error(f"Failed to check models: {e}")
+        logger.error(f"Failed to check models: {e}")
+
+# Function to download a specific model
+def download_model(model_name):
+    """Download the model using Ollama's API with streaming support and log messages."""
+    try:
+        # Send a request to pull the model from Ollama library with streaming enabled
+        response = httpx.post(f"{OLLAMA_API_URL}/api/pull", json={"name": model_name, "stream": True}, timeout=None)
+        response.raise_for_status()
+
+        st.text(f"Model '{model_name}' is downloading...")
+        logger.info(f"Model '{model_name}' is downloading...")
+
+        # Stream response updates
+        for line in response.iter_lines():
+            if line:
+                try:
+                    event_data = json.loads(line)
+
+                    status = event_data.get("status", "")
+                    digest = event_data.get("digest", "")
+                    total = event_data.get("total", 0)
+                    completed = event_data.get("completed", 0)
+
+                    if status == "success":
+                        st.success(f"Model '{model_name}' downloaded successfully.")
+                        logger.info(f"Model '{model_name}' downloaded successfully.")
+                        break
+                    elif "downloading" in status:
+                        percentage = (completed / total) * 100 if total > 0 else 0
+                        message = f"Downloading {digest}: {completed}/{total} bytes ({percentage:.2f}%)"
+                        st.text(message)
+                        logger.info(message)
+                    else:
+                        st.text(f"Status: {status}")
+                        logger.info(f"Status: {status}")
+
+                except json.JSONDecodeError as e:
+                    st.error(f"Error decoding JSON: {e}")
+                    logger.error(f"Error decoding JSON: {e}")
+                    continue
+
+            time.sleep(1)  # Small delay to avoid overwhelming updates
+
+    except httpx.HTTPStatusError as e:
+        error_message = f"Failed to download model '{model_name}': {e}"
+        st.error(error_message)
+        logger.error(error_message)
+    except Exception as e:
+        error_message = f"An error occurred: {e}"
+        st.error(error_message)
+        logger.error(error_message)
+
+def start_ollama_container():
+    client = docker.from_env()
+
+    # Ensure the 'ollama' Docker network exists
+    create_network_if_not_exists(network_name="ollama")
+
+    try:
+        # Check if a container named 'ollama' is already running
+        containers = client.containers.list(filters={"name": "ollama"})
+        if containers:
+            logger.info("Ollama container is already running.")
+            st.text("Ollama container is already running.")
+            container = containers[0]
+        else:
+            st.text("Starting a new Ollama container...")
+            logger.info("Starting a new Ollama container...")
+
+            # Run a new Ollama container
+            docker_command = "docker run --network ollama -d --name ollama -p 11434:11434 ollama/ollama:latest"
+            command_result = subprocess.run(
+                docker_command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                shell=True,
+                check=True
+            )
+
+            if command_result.returncode == 0:
+                container_id = command_result.stdout.strip().decode("utf-8")
+                logger.info(f"Ollama container started successfully with ID: {container_id}")
+                st.success(f"Ollama container started successfully with ID: {container_id}")
+                container = client.containers.get(container_id)
+            else:
+                error_message = f"Failed to start Ollama container: {command_result.stderr.decode('utf-8')}"
+                logger.error(error_message)
+                st.error(error_message)
+                return None
+
+        # Wait for the Ollama service to become available
+        if wait_for_service("localhost", 11434):
+            st.success("Ollama service is now available on port 11434.")
+            logger.info("Ollama service is now available on port 11434.")
+
+            # Pre-download llama2 and mistral:7b models when the Ollama container starts
+            logger.info("Downloading Ollama LLM Models...")
+            st.info("Downloading Ollama LLM Models...")
+            check_and_download_models(["llama2", "mistral:7b"])
+
+            return container
+        else:
+            logger.error("Ollama service did not become available in time.")
+            st.error("Ollama service did not become available in time. Check container logs.")
+            return None
+
+    except subprocess.CalledProcessError as e:
+        error_message = f"Failed to execute Docker command: {str(e)}"
+        logger.error(error_message)
+        st.error(error_message)
+        return None
+
+    except docker.errors.DockerException as e:
+        error_message = f"Docker error: {str(e)}"
+        logger.error(error_message)
+        st.error(error_message)
+        return None
+
+    except Exception as e:
+        error_message = f"Unexpected error: {str(e)}"
+        logger.error(error_message)
+        st.error(error_message)
+        return None
+
+
+def wait_for_service(host, port, timeout=5, retries=5):
+    """Wait for the service to be available on the given host and port."""
+    while retries > 0:
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                logger.info(f"Service at {host}:{port} is available.")
+                st.text(f"Service at {host}:{port} is available.")
+                return True
+        except (socket.timeout, ConnectionRefusedError):
+            logger.warning(f"Waiting for service at {host}:{port} to be available... (retries remaining: {retries})")
+            st.text(f"Waiting for service at {host}:{port} to be available... (retries remaining: {retries})")
+            retries -= 1
+            time.sleep(5)  # Wait for 5 seconds before retrying
+    return False
+
+def start_vector_db(docker_command, container_name="default", port=7000):
+    client = docker.from_env()
+
+    try:
+        # Check if the container already exists
+        try:
+            container = client.containers.get(container_name)
+            if container.status == 'running':
+                logger.info(f"Container '{container_name}' is already running.")
+                st.text(f"Container '{container_name}' is already running.")
+            else:
+                logger.info(f"Container '{container_name}' exists but is not running. Starting it...")
+                container.start()
+                st.text(f"Container '{container_name}' started successfully.")
+        except docker.errors.NotFound:
+            logger.info(f"Container '{container_name}' does not exist. Starting a new one...")
+            st.text(f"Starting a new '{container_name}' container...")
+
+            # Run the Docker command to start the container
+            command_result = subprocess.run(
+                docker_command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True
+            )
+
+            if command_result.returncode == 0:
+                container_id = command_result.stdout.strip().decode("utf-8")
+                logger.info(f"Container '{container_name}' started successfully with ID: {container_id}")
+                st.success(f"Container '{container_name}' started successfully with ID: {container_id}")
+                container = client.containers.get(container_id)
+            else:
+                error_message = f"Failed to start Docker container with command: {docker_command}. Error: {command_result.stderr.decode('utf-8')}"
+                logger.error(error_message)
+                st.error(error_message)
+                return None
+
+        # Wait for the container service to become available
+        if wait_for_service("localhost", port):
+            st.success(f"{container_name} service is now available on port {port}.")
+            logger.info(f"{container_name} service is now available on port {port}.")
+        else:
+            logger.error("{container_name} service did not become available in time.")
+            st.error("{container_name} service did not become available in time. Check container logs.")
+            return None
         
-        client = QdrantClient(host="localhost", port=port)
-        logger.info(f"Host port connected to container: {port}")
-        for i in range(0, MAX_ATTEMPTS):
-            st.text(f"Attempt {i+1}")
-            try:
-                client.get_collections()
-                st.success("Connected to database!")
-                return client
-            except:
-                st.text(f"Connection failed. Retrying in {ATTEMPT_DELAY} seconds")
-            time.sleep(ATTEMPT_DELAY)
-        
-        logger.error("Couldn't connect to the created database")
+        # After ensuring the container is running, initialize the Qdrant client
+        st.text("Connecting to the Qdrant vector database...")
+        qdrant_client = QdrantClient(host="localhost", port=port)
+        logger.info("Connected to Qdrant vector database.")
+        st.success("Connected to Qdrant vector database.")
+        return qdrant_client
+
+    except subprocess.CalledProcessError as e:
+        error_message = f"Failed to execute Docker command: {str(e)}"
+        logger.error(error_message)
+        st.error(error_message)
+        return None
+
+    except docker.errors.DockerException as e:
+        error_message = f"Docker error: {str(e)}"
+        logger.error(error_message)
+        st.error(error_message)
+        return None
+
+    except Exception as e:
+        error_message = f"Unexpected error: {str(e)}"
+        logger.error(error_message)
+        st.error(error_message)
+        return None
     
 def validate_collection(client, collection):
     collections = client.get_collections()
@@ -165,7 +376,15 @@ def validate_collection(client, collection):
 def load_chat_memory_from_volume(mem_config, chat_db_volume, chat_store_collection):
     st.text(f"Loading the data in {chat_db_volume} into a database container")
     docker_command = ["sudo", "docker", "run", "-d", "--name", "FMSDemo_chat_db", "-p", f"{CHAT_DB_PORT}:6333", "-v", f"{chat_db_volume}:/qdrant"] + mem_config + ["qdrant/qdrant"]
-    chat_db_client = start_vector_db(docker_command)
+    chat_db_client = start_vector_db(docker_command, container_name="FMSDemo_chat_db", port=CHAT_DB_PORT)
+    if chat_db_client:
+        st.text(f"Document database container is ready")
+        logger.info(f"Document database container is ready")
+    else:
+        st.error("Failed to start or use the chat database container (FMSDemo_chat_db).")
+        logger.error("Failed to start or use the chat database container (FMSDemo_chat_db).")
+        return None
+
     validate_collection(chat_db_client, chat_store_collection)
     chat_vector_store = QdrantVectorStore(client=chat_db_client, collection_name=chat_store_collection)
     vector_memory = VectorMemory.from_defaults(vector_store=chat_vector_store, 
@@ -177,26 +396,72 @@ def load_chat_memory_from_volume(mem_config, chat_db_volume, chat_store_collecti
     return vector_memory
     
 def create_new_chat_memory(mem_config):
+    collection_name = "llamaindex_chat_store"
     st.text(f"Creating new vector database for chat messages")
+    logging.info(f"Creating new vector database for chat messages")
+    
+    # Docker command to start the chat database container
     docker_command = ["sudo", "docker", "run", "-d", "--name", "FMSDemo_chat_db", "-p", f"{CHAT_DB_PORT}:6333"] + mem_config + ["qdrant/qdrant"]
-    chat_db_client = start_vector_db(docker_command)
-    #just like create_new_doc_index, the collection name is a nonfactor when creating from scratch
-    chat_vector_store = QdrantVectorStore(client=chat_db_client, collection_name="llamaindex_chat_store")
+    
+    # Ensure the chat database container is started
+    chat_db_client = start_vector_db(docker_command, container_name="FMSDemo_chat_db", port=CHAT_DB_PORT)
+
+    if chat_db_client:
+        st.text(f"Chat database container is ready")
+        logger.info(f"Chat database container is ready")
+    else:
+        st.error("Failed to start or use the chat database container (FMSDemo_chat_db).")
+        logger.error("Failed to start or use the chat database container (FMSDemo_chat_db).")
+        return None
+    
+    # Check if the collection already exists
+    try:
+        collection_info = chat_db_client.get_collection(collection_name=collection_name)
+        if collection_info:
+            st.text(f"Collection '{collection_name}' already exists. Skipping creation.")
+            logger.info(f"Collection '{collection_name}' already exists. Skipping creation.")
+        else:
+            raise UnexpectedResponse(f"Collection '{collection_name}' does not exist.")
+    except UnexpectedResponse:
+        # If the collection does not exist, create it
+        st.text(f"Creating collection '{collection_name}'...")
+        try:
+            chat_db_client.create_collection(
+                collection_name=collection_name,
+                vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE)
+            )
+            st.success(f"Collection '{collection_name}' created successfully.")
+            logger.info(f"Collection '{collection_name}' created successfully.")
+        except Exception as e:
+            error_message = f"Failed to create collection '{collection_name}': {str(e)}"
+            st.error(error_message)
+            logger.error(error_message)
+            return None
+
+    # Create the vector store and vector memory
+    chat_vector_store = QdrantVectorStore(client=chat_db_client, collection_name=collection_name)
     vector_memory = VectorMemory.from_defaults(vector_store=chat_vector_store, 
                                                retriever_kwargs={"similarity_top_k": 2})
-    chat_db_client.create_collection(
-        collection_name="llamaindex_chat_store",
-        vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE)
-    )
+    
+    # Add predefined messages to the vector memory
     for msg in RELEVANT_DEMO_HISTORY:
         vector_memory.put(msg)
+    
     st.success("Creation complete!")
     return vector_memory
 
 def load_doc_index_from_volume(mem_config, doc_db_volume, doc_store_collection):
     st.text(f"Loading the data in {doc_db_volume} into a database container")
     docker_command = ["sudo", "docker", "run", "-d", "--name", "FMSDemo_doc_db", "-p", f"{DOC_DB_PORT}:6333", "-v", f"{doc_db_volume}:/qdrant"] + mem_config + ["qdrant/qdrant"]
-    doc_db_client = start_vector_db(docker_command)
+    doc_db_client = start_vector_db(docker_command, container_name="FMSDemo_doc_db", port=DOC_DB_PORT)
+    if doc_db_client:
+        st.text(f"Document database container is ready")
+        logger.info(f"Document database container is ready")
+    else:
+        st.error("Failed to start or use the document database container (FMSDemo_doc_db).")
+        logger.error("Failed to start or use the document database container (FMSDemo_doc_db).")
+        return None
+    
     validate_collection(doc_db_client, doc_store_collection)
     doc_vector_store = QdrantVectorStore(client=doc_db_client, collection_name=doc_store_collection)
     st.success("Loading complete!")
@@ -206,7 +471,20 @@ def load_doc_index_from_volume(mem_config, doc_db_volume, doc_store_collection):
 def create_new_doc_index(mem_config, doc_data_dir):
     st.text("Creating new vector database to ingest documents into")
     docker_command = ["sudo", "docker", "run", "--name", "FMSDemo_doc_db", "-p", f"{DOC_DB_PORT}:6333", "-d"] + mem_config + ["qdrant/qdrant"]
-    doc_db_client = start_vector_db(docker_command)
+    doc_db_client = start_vector_db(docker_command, container_name="FMSDemo_doc_db", port=DOC_DB_PORT)
+    if doc_db_client:
+        st.text(f"Document database container is ready")
+        logger.info(f"Document database container is ready")
+    else:
+        st.error("Failed to start or use the document database container (FMSDemo_doc_db).")
+        logger.error("Failed to start or use the document database container (FMSDemo_doc_db).")
+        return None
+
+    if doc_db_client is None:
+        logger.error("Failed to start the Docker container for the document database.")
+        st.error("Failed to start the Docker container for the document database.")
+        return None, None
+
     #when creating the collection from scratch, just give it a random name. It won't affect the index creation
     doc_vector_store = QdrantVectorStore(client=doc_db_client, collection_name="llamaindex_doc_store")
     storage_context = StorageContext.from_defaults(vector_store=doc_vector_store)
@@ -345,7 +623,6 @@ def run_queries(doc_index, pipeline_memory, model, task_label):
 if __name__ == "__main__":
     reset_demo() #make sure no containers were left hanging before this rerun
     st.title("LlamaIndex RAG pipeline demo :llama:")
-    check_for_ollama_container()
 
     if "created_containers" not in st.session_state:
         st.session_state.created_containers = [] #keep track of what docker containers are made so they can be removed as needed (either for error cleanup or to restart databases)
@@ -401,11 +678,20 @@ if __name__ == "__main__":
             mem_config
         )
 
-        logger.info(f"Starting {model} model in Ollama container")
-        try:
-            subprocess.run(["sudo", "docker", "exec", "-d", "ollama", "ollama", "run", model], check=True)
-        except subprocess.CalledProcessError:
-            logger.error("Error: docker exec failed to start the model in the Ollama container") 
-            reset_demo()
+        with st.status(":orange[**Starting Ollama container and setting up models**]", expanded=True) as status:
+            logger.info(f"Starting {model} model in Ollama container")
+            st.text(f"Starting {model} model in Ollama container")
+            # Start the Ollama Container
+            ollama_container = start_ollama_container()
+
+            # Verify the container started and the service became available
+            if ollama_container:
+                st.text(f"Ollama container is ready: {ollama_container.short_id}")
+                # Successfully started the Ollama container and set up models
+                status.update(label=":green[Ollama container started and models set up successfully.]", expanded=False, state="complete")
+            else:
+                st.error("Ollama container could not be started or service did not become available.")
+                status.update(label=":red[Failed to start Ollama container.]", expanded=False, state="failed")
+                reset_demo()            
 
         run_queries(st.session_state.doc_index, st.session_state.pipeline_memory, model, task_label)

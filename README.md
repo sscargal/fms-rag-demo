@@ -34,12 +34,38 @@ source llmdemo/bin/activate
 pip install -r requirements.txt
 ```
 
+5. Add your username to the `docker` group
+
+If you run the application as a non-root user, your username must be added to the `docker` group to allow socket communication to the containers.
+
+- **Check if Your User is in the Docker Group:**
+Docker requires that the user running Docker commands be part of the docker group. You can check if your user is part of the docker group with this command:
+```bash
+groups
+```
+
+Look for docker in the list of groups. If you don't see it, you’ll need to add your user to the Docker group.
+
+- **Add Your User to the Docker Group:**
+If your user is not in the docker group, you can add the user to the group using the following command:
+
+```bash
+sudo usermod -aG docker $USER
+```
+
+After adding the user to the docker group, you’ll need to log out and back in for the changes to take effect. Alternatively, you can run:
+
+```bash
+newgrp docker
+```
+This will apply the changes to your current session without needing to log out.
+
 ## Quick Start
 
 1. Activate the virtual environment:
 
 ```bash
-source myenv/bin/activate
+source llmdemo/bin/activate
 ```
 
 2. Start the we UI:
@@ -88,7 +114,7 @@ The demo repository comes with some sample data and chat messages to use. To use
 2. Run `streamlit run fmsdemo.py`, and open the UI in a web browser
 3. Enter the task label name (eg "demo")
 4. Press the `Launch demo` button
-- That's it! You can now input queries into the pipeline. The documents that were ingested by the script are a few Wikipedia articles and a paper on the origins of COVID (you can read the original documents yourself within the `data` directory)
+- That's it! You can now input queries into the pipeline, for example "Why is the sky blue?". The documents that were ingested by the script are a few Wikipedia articles and a paper on the origins of COVID (you can read the original documents yourself within the `data` directory)
 - The terminal contains additional program information. Notably, it contains more verbose output from the RAG pipeline
 - When you're done, press the `Stop demo and show data` button. Optionally, you can then press `Save benchmark data to disk` to write measurements about the pipeline to a file
 
@@ -169,3 +195,9 @@ pyenv install 3.11.9
 ```
 
 There should be no new errors.
+
+---
+
+Error: "ModuleNotFoundError: No module named '_ctypes'"
+
+Solution: Activate the Python environment using `source llmdemo/bin/activate`
